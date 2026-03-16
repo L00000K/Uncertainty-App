@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spatial Variability Analysis</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+</head>
+
+<body>
+    <div class="background-animation"></div>
+
+    <div class="app-container">
+        <header>
+            <div class="logo">
+                <div class="logo-icon"></div>
+                <h1>Spatial Variability <span>Analysis</span></h1>
+            </div>
+            <p class="subtitle">Import contacts → define zone of influence → compute local variability.</p>
+        </header>
+
+        <main>
+            <!-- ═══ LEFT SIDEBAR ═══ -->
+            <aside class="control-panel glass-panel">
+                <div class="sidebar-step active" data-target="tab-input">
+                    <h2 class="step-title">1. Data Input</h2>
+                    <div class="step-content">
+                        <div class="input-group">
+                            <label for="csv-upload">Upload Contacts (X, Y, Z)</label>
+                            <div class="file-drop-area" id="drop-area">
+                                <span class="file-message">Drag & Drop or CSV Select</span>
+                                <input type="file" id="csv-upload" accept=".csv">
+                            </div>
+                        </div>
+
+                        <div class="input-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="normalize-check">
+                                <span class="checkmark"></span>
+                                Normalise (remove first-order trend)
+                            </label>
+                            <div id="trend-info" class="trend-info hidden">
+                                <span id="trend-equation"></span>
+                            </div>
+                        </div>
+
+                        <button id="process-btn" class="primary-btn" disabled>
+                            <span class="btn-text">Process All</span>
+                            <span class="loader hidden"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="sidebar-step" data-target="tab-zoi">
+                    <!-- Zone of Influence controls -->
+                    <h2 class="step-title">
+                        2. Zone of Influence
+                        <div class="info-tooltip">
+                            <span class="info-icon">i</span>
+                            <div class="info-popup">Gaussian: <code>f(d) = 1 − exp(−d² / 2σ²)</code></div>
+                        </div>
+                    </h2>
+                    <div class="step-content">
+                        <div class="input-group range-slider">
+                            <label for="sigma-slider">Sigma (σ)</label>
+                            <div class="slider-container">
+                                <input type="range" id="sigma-slider" min="1" max="5000" value="500" step="1">
+                                <span id="sigma-value">500</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-step" data-target="tab-variability">
+                    <!-- Variability controls -->
+                    <h2 class="step-title">
+                        3. Local Variability
+                        <div class="info-tooltip">
+                            <span class="info-icon">i</span>
+                            <div class="info-popup">Moving Standard Deviation of nearby elevations. Instead of
+                                down-weighting far points continuously, we use a Tukey Taper: Points up to 80% of max
+                                distance are weighted equally, then smoothly taper to 0.</div>
+                        </div>
+                    </h2>
+                    <div class="step-content">
+                        <div class="input-group range-slider">
+                            <label for="min-pts-slider">Min Points</label>
+                            <div class="slider-container">
+                                <input type="range" id="min-pts-slider" min="2" max="30" value="3" step="1">
+                                <span id="min-pts-value">3</span>
+                            </div>
+                        </div>
+
+                        <div class="input-group range-slider">
+                            <label for="min-dist-slider">Min Distance (m)</label>
+                            <div class="slider-container">
+                                <input type="range" id="min-dist-slider" min="0" max="2000" value="0" step="10">
+                                <span id="min-dist-value">0</span>
+                            </div>
+                        </div>
+
+                        <div class="input-group range-slider">
+                            <label for="max-dist-slider">Max Distance (m)</label>
+                            <div class="slider-container">
+                                <input type="range" id="max-dist-slider" min="50" max="10000" value="1000" step="50">
+                                <span id="max-dist-value">1000</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-step" data-target="tab-uncertainty">
+                    <!-- Uncertainty controls -->
+                    <h2 class="step-title">
+                        4. Uncertainty
+                        <div class="info-tooltip">
+                            <span class="info-icon">i</span>
+                            <div class="info-popup">Combined Uncertainty: <code>I × V × Z-Score</code><br>(Influence
+                                &nbsp;×&nbsp; Variability &nbsp;×&nbsp; Confidence)</div>
+                        </div>
+                    </h2>
+                    <div class="step-content">
+                        <div class="input-group">
+                            <label for="confidence-select">Confidence Level</label>
+                            <select id="confidence-select" class="glass-select"
+                                style="background:rgba(255,255,255,0.5); color:#1a1a2e; width: 100%; padding: 6px; border-radius: 4px; border: 1px solid #ccc;">
+                                <option value="1">1 Sigma (approx 68%)</option>
+                                <option value="2" selected>2 Sigma (approx 95%)</option>
+                                <option value="3">3 Sigma (approx 99.7%)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-step" data-target="tab-final3d">
+                    <h2 class="step-title">
+                        5. Final 3D Model
+                        <div class="info-tooltip">
+                            <span class="info-icon">i</span>
+                            <div class="info-popup">Mean surface ± Combined Uncertainty. Sliced dynamically.</div>
+                        </div>
+                    </h2>
+                    <div class="step-content">
+                        <p class="section-desc" style="margin-top:0;">Dynamically clip the volumes.</p>
+
+                        <div class="input-group range-slider">
+                            <label for="f-ve-slider">Vertical Exaggeration</label>
+                            <div class="slider-container">
+                                <input type="range" id="f-ve-slider" min="0.5" max="20" value="2" step="0.5">
+                                <span id="f-ve-val">2</span>
+                            </div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="slice-mode">Live Section Mode</label>
+                            <select id="slice-mode" class="glass-select"
+                                style="background:rgba(255,255,255,0.5); color:#1a1a2e; width: 100%; padding: 6px; border-radius: 4px; border: 1px solid #ccc;">
+                                <option value="front" selected>Remove Front</option>
+                                <option value="back">Remove Back</option>
+                                <option value="slice">Thick Slice</option>
+                            </select>
+                        </div>
+
+                        <div class="input-group range-slider">
+                            <label for="slice-angle">Section Angle (°)</label>
+                            <div class="slider-container">
+                                <input type="range" id="slice-angle" min="0" max="360" value="0" step="1">
+                                <span id="slice-angle-val">0</span>
+                            </div>
+                        </div>
+
+                        <div class="input-group range-slider">
+                            <label for="slice-pos">Section Position (%)</label>
+                            <div class="slider-container">
+                                <input type="range" id="slice-pos" min="0" max="100" value="50" step="1">
+                                <span id="slice-pos-val">50</span>
+                            </div>
+                        </div>
+
+                        <div class="input-group range-slider" id="slice-thick-group" style="display:none;">
+                            <label for="slice-thick">Slice Thickness (%)</label>
+                            <div class="slider-container">
+                                <input type="range" id="slice-thick" min="1" max="50" value="10" step="1">
+                                <span id="slice-thick-val">10</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stats-box">
+                    <h3>Data Summary</h3>
+                    <div class="stat-row"><span>Points:</span> <span id="stat-points">0</span></div>
+                    <div class="stat-row"><span>Pairs:</span> <span id="stat-pairs">0</span></div>
+                    <div class="stat-row"><span>Max Dist:</span> <span id="stat-maxdist">—</span></div>
+                    <div class="stat-row"><span>Max ΔZ:</span> <span id="stat-maxdz">—</span></div>
+                </div>
+            </aside>
+
+            <!-- ═══ RIGHT PANEL ═══ -->
+            <section class="visualization-panel">
+                <!-- View Container -->
+
+                <div class="view-container glass-panel">
+
+                    <!-- ── INPUT DATA ── -->
+                    <div id="tab-input" class="primary-view active">
+                        <div class="sub-tabs">
+                            <button class="sub-tab-btn active" data-target="input-plan">Plan View</button>
+                            <button class="sub-tab-btn" data-target="input-3d">3D View</button>
+                        </div>
+                        <div class="sub-view-container">
+                            <div id="input-plan" class="sub-view active">
+                                <div id="input-plan-map" class="plot-area">
+                                    <div class="empty-state">
+                                        <div class="empty-icon"></div>
+                                        <p>Upload contacts to see them on a plan map.</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="input-3d" class="sub-view">
+                                <div id="input-3d-plot" class="plot-area">
+                                    <div class="empty-state">
+                                        <div class="empty-icon"></div>
+                                        <p>Upload contacts for a 3D interpolation.</p>
+                                    </div>
+                                </div>
+                                <!-- 3D Legend panel -->
+                                <div id="viewer-3d-legend" class="leaflet-control hidden"
+                                    style="position:absolute; top:10px; right:10px; background:rgba(255,255,255,0.9); padding:10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:100; min-width: 180px;">
+                                    <h4 style="margin-bottom:8px; font-size:0.9rem;">3D Layers</h4>
+                                    <label
+                                        style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                            type="checkbox" id="layer-raw-pts" checked> Raw Contacts (Red)</label>
+                                    <label
+                                        style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                            type="checkbox" id="layer-raw-labels" checked> Raw Elevations</label>
+                                    <label
+                                        style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                            type="checkbox" id="layer-norm-plane"> Normalisation Plane</label>
+                                    <label
+                                        style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                            type="checkbox" id="layer-norm-pts"> Normalised Contacts (Blue)</label>
+                                    <label
+                                        style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                            type="checkbox" id="layer-norm-labels"> Normalised Elevations</label>
+                                    <label
+                                        style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                            type="checkbox" id="layer-interpolated" checked> Interpolated
+                                        Surface</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── ZONE OF INFLUENCE ── -->
+                    <div id="tab-zoi" class="primary-view zoi-stacked">
+                        <div id="zoi-map" class="stacked-section top-half">
+                            <div id="zoi-leaflet-map" class="plot-area">
+                                <div class="empty-state">
+                                    <div class="empty-icon"></div>
+                                    <p>Process data to view the uncertainty map.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="zoi-variogram" class="stacked-section bottom-half">
+                            <div id="plotly-variogram" class="plot-area">
+                                <div class="empty-state">
+                                    <div class="empty-icon"></div>
+                                    <p>Process data to view the variogram.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── VARIABILITY ── -->
+                    <div id="tab-variability" class="primary-view">
+                        <div class="sub-view-container" style="height:100%">
+                            <div id="variability-map-container" class="plot-area" style="height:100%">
+                                <div class="empty-state">
+                                    <div class="empty-icon"></div>
+                                    <p>Process data to see the StDev heatmap.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── UNCERTAINTY ── -->
+                    <div id="tab-uncertainty" class="primary-view">
+                        <div class="sub-view-container" style="height:100%">
+                            <div id="uncertainty-map-container" class="plot-area" style="height:100%">
+                                <div class="empty-state">
+                                    <div class="empty-icon"></div>
+                                    <p>Process data to see the combined Uncertainty heatmap.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── FINAL 3D ── -->
+                    <div id="tab-final3d" class="primary-view">
+                        <div class="sub-view-container" style="height:100%; position:relative;">
+                            <div id="final-3d-plot" class="plot-area" style="height:100%;">
+                                <div class="empty-state">
+                                    <div class="empty-icon"></div>
+                                    <p>Process data to generate the final 3D Uncertainty bounds.</p>
+                                </div>
+                            </div>
+                            <!-- Final 3D Legend panel -->
+                            <div id="final-3d-legend" class="leaflet-control hidden"
+                                style="position:absolute; top:10px; right:10px; background:rgba(255,255,255,0.9); padding:10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:100; min-width: 180px;">
+                                <h4 style="margin-bottom:8px; font-size:0.9rem;">Model Layers</h4>
+                                <label
+                                    style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                        type="checkbox" id="layer-f-mean" checked> Mean Surface (Purple)</label>
+                                <hr style="margin:6px 0; border-top:1px solid #ddd; border-bottom:none;">
+                                <label
+                                    style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                        type="checkbox" id="layer-f-plus" checked> + Uncertainty Bound (Red)</label>
+                                <label
+                                    style="display:flex; gap:6px; margin-bottom:4px; align-items:center; cursor:pointer;"><input
+                                        type="checkbox" id="layer-f-minus" checked> - Uncertainty Bound (Blue)</label>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
