@@ -600,7 +600,7 @@ document.addEventListener('DOMContentLoaded', () => {
         threeMeshes['layer-interpolated'] = new THREE.Group();
         Object.values(threeMeshes).forEach(m => threeScene.add(m));
 
-        const sphereGeo = new THREE.SphereGeometry(0.015, 16, 16);
+        const sphereGeo = new THREE.SphereGeometry(0.0075, 16, 16);
         const rawMat = new THREE.MeshLambertMaterial({ color: 0xdc2626 });
         const normMat = new THREE.MeshLambertMaterial({ color: 0x2563eb });
 
