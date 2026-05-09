@@ -469,8 +469,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             document.querySelectorAll('#viewer-3d-legend input').forEach(chk => {
                 chk.addEventListener('change', e => {
-                    if (threeMeshes[e.target.id]) {
-                        threeMeshes[e.target.id].visible = e.target.checked;
+                    const id = e.target.id;
+                    if (threeMeshes[id]) threeMeshes[id].visible = e.target.checked;
+                    
+                    // Auto-hide labels if parent points are turned off
+                    if (id === 'layer-raw-pts' && !e.target.checked) {
+                        const lbl = document.getElementById('layer-raw-labels');
+                        if (lbl) { lbl.checked = false; if (threeMeshes['layer-raw-labels']) threeMeshes['layer-raw-labels'].visible = false; }
+                    }
+                    if (id === 'layer-norm-pts' && !e.target.checked) {
+                        const lbl = document.getElementById('layer-norm-labels');
+                        if (lbl) { lbl.checked = false; if (threeMeshes['layer-norm-labels']) threeMeshes['layer-norm-labels'].visible = false; }
                     }
                 });
             });
@@ -567,15 +576,27 @@ document.addEventListener('DOMContentLoaded', () => {
             const vx = positions.getX(i), vz = positions.getZ(i);
             const worldX = cx + (vx / scaleXYZ), worldY = cy - (vz / scaleXYZ);
 
-            let wSum = 0, zSum = 0;
+            // Exact Interpolation using IDW (p=2) instead of smoothing
+            let wSum = 0, wzSum = 0;
+            let exact = false;
             for (let k = 0; k < n; k++) {
                 const dx = worldX - pointData.x[k], dy = worldY - pointData.y[k];
-                const wght = Math.exp(-(dx * dx + dy * dy) / twoSS);
-                wSum += wght; zSum += pointData.z[k] * wght;
+                const dSq = dx * dx + dy * dy;
+                if (dSq < 1e-12) {
+                    const zExact = pointData.z[k];
+                    const vy = isNormalized ? (zExact * scaleXYZ * 2) : ((zExact - cz) * scaleXYZ * 2);
+                    positions.setY(i, vy);
+                    exact = true;
+                    break;
+                }
+                const w = 1 / dSq;
+                wSum += w; zSum += pointData.z[k] * w;
             }
-            const zInterp = wSum > 1e-12 ? zSum / wSum : 0;
-            const vy = isNormalized ? (zInterp * scaleXYZ * 2) : ((zInterp - cz) * scaleXYZ * 2);
-            positions.setY(i, vy);
+            if (!exact) {
+                const zInterp = wSum > 1e-12 ? zSum / wSum : 0;
+                const vy = isNormalized ? (zInterp * scaleXYZ * 2) : ((zInterp - cz) * scaleXYZ * 2);
+                positions.setY(i, vy);
+            }
         }
         surfGeo.computeVertexNormals();
 
@@ -1148,6 +1169,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 const f = 1 - Math.exp(-minSq / twoSS);
                 let wMean = NaN, sd = -1;
 
+                // 1. Exact Interpolation using IDW (p=2) for Mean Surface
+                let wSumIDW = 0, wzSumIDW = 0;
+                let exact = false;
+                for (let k = 0; k < n; k++) {
+                    const dx = wx - pts.x[k], dy = wy - pts.y[k];
+                    const dSq = dx * dx + dy * dy;
+                    if (dSq < 1e-12) {
+                        wMean = pts.z[k];
+                        exact = true;
+                        break;
+                    }
+                    const w = 1 / dSq;
+                    wSumIDW += w; wzSumIDW += w * pts.z[k];
+                }
+                if (!exact) {
+                    wMean = wSumIDW > 1e-12 ? wzSumIDW / wSumIDW : NaN;
+                }
+
+                // 2. Variability (StDev) calculation using Tukey weights
                 if (dataPoints.length >= minPts) {
                     let wSum = 0;
                     let wzSum = 0;
@@ -1156,10 +1196,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         wzSum += p.w * p.z;
                     }
                     if (wSum > 1e-12) {
-                        wMean = wzSum / wSum;
+                        const m = wzSum / wSum; // This is the SMOOTHED mean for variance calculation
                         let varSum = 0;
                         for (let p of dataPoints) {
-                            varSum += p.w * (p.z - wMean) * (p.z - wMean);
+                            varSum += p.w * (p.z - m) * (p.z - m);
                         }
                         sd = Math.sqrt(varSum / wSum);
                     }
