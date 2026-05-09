@@ -1185,9 +1185,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Add Listeners to Legend
-        document.getElementById('layer-f-mean').addEventListener('change', e => { if (fMeshes.mean) fMeshes.mean.visible = e.target.checked; });
-        document.getElementById('layer-f-plus').addEventListener('change', e => { if (fMeshes.plus) fMeshes.plus.visible = e.target.checked; });
-        document.getElementById('layer-f-minus').addEventListener('change', e => { if (fMeshes.minus) fMeshes.minus.visible = e.target.checked; });
+        document.getElementById('layer-f-pts')?.addEventListener('change', e => { if (fMeshes.pts) fMeshes.pts.visible = e.target.checked; });
+        document.getElementById('layer-f-mean')?.addEventListener('change', e => { if (fMeshes.mean) fMeshes.mean.visible = e.target.checked; });
+        document.getElementById('layer-f-plus')?.addEventListener('change', e => { if (fMeshes.plus) fMeshes.plus.visible = e.target.checked; });
+        document.getElementById('layer-f-minus')?.addEventListener('change', e => { if (fMeshes.minus) fMeshes.minus.visible = e.target.checked; });
 
         const pts = pointData;
         const n = pts.x.length;
@@ -1288,8 +1289,16 @@ document.addEventListener('DOMContentLoaded', () => {
         ];
 
         // Replace meshes
-        ['mean', 'plus', 'minus'].forEach((k) => {
-            if (fMeshes[k]) { fScene.remove(fMeshes[k]); fMeshes[k].geometry.dispose(); fMeshes[k].material.dispose(); }
+        // Replace meshes
+        ['pts', 'mean', 'plus', 'minus'].forEach((k) => {
+            if (fMeshes[k]) {
+                fScene.remove(fMeshes[k]);
+                if (fMeshes[k].isGroup) {
+                    fMeshes[k].children.forEach(c => { c.geometry.dispose(); c.material.dispose(); });
+                } else if (fMeshes[k].geometry) {
+                    fMeshes[k].geometry.dispose(); fMeshes[k].material.dispose();
+                }
+            }
         });
 
         const matMean = new THREE.MeshLambertMaterial({ color: 0xa855f7, transparent: true, opacity: 0.9, side: THREE.DoubleSide, clippingPlanes: fClipPlanes });
@@ -1300,10 +1309,21 @@ document.addEventListener('DOMContentLoaded', () => {
         fMeshes.plus = buildSurfaceMesh(gridSize, minX, sx, minY, sy, zPlus, matPlus);
         fMeshes.minus = buildSurfaceMesh(gridSize, minX, sx, minY, sy, zMinus, matMinus);
 
-        ['mean', 'plus', 'minus'].forEach((k) => {
+        fMeshes.pts = new THREE.Group();
+        const dSpan = Math.max(maxX - minX, maxY - minY) || 1000;
+        const ptGeo = new THREE.SphereGeometry(dSpan * 0.0075, 16, 16);
+        const ptMat = new THREE.MeshLambertMaterial({ color: 0xdc2626, clippingPlanes: fClipPlanes });
+        for (let i = 0; i < n; i++) {
+            const m = new THREE.Mesh(ptGeo, ptMat);
+            m.position.set(pts.x[i], (pts.z[i] - minZ) * ve, -pts.y[i]);
+            fMeshes.pts.add(m);
+        }
+
+        ['pts', 'mean', 'plus', 'minus'].forEach((k) => {
             if (fMeshes[k]) {
                 fScene.add(fMeshes[k]);
-                fMeshes[k].visible = document.getElementById(`layer-f-${k}`).checked;
+                const cb = document.getElementById(`layer-f-${k}`);
+                if (cb) fMeshes[k].visible = cb.checked;
             }
         });
 
