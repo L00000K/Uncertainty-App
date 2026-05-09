@@ -274,6 +274,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 applyNormalisation();
                 computeVariogram();
+                computeRBF();
                 renderInputPlan();
                 render3DView();
                 initZoiMap();
@@ -349,6 +350,92 @@ document.addEventListener('DOMContentLoaded', () => {
         trendEquation.textContent = `Z = ${a.toFixed(6)}·X ${sign(b)}${b.toFixed(6)}·Y ${sign(c)}${c.toFixed(2)}`;
         trendInfo.classList.remove('hidden');
         globalTrend = { a, b, c };
+    }
+
+    // ═══════════════════════════════════════
+    //  RBF INTERPOLATION (Radial Basis Function)
+    // ═══════════════════════════════════════
+
+    let rbfWeights = null;
+    let rbfAverageSpacing = 1;
+
+    function rbfPhi(r) {
+        // Hardy's Multiquadric: smooth, positive definite
+        return Math.sqrt(r * r + rbfAverageSpacing * rbfAverageSpacing);
+    }
+
+    function solveLinearSystem(A, b) {
+        const n = b.length;
+        const M = [];
+        for (let i = 0; i < n; i++) M.push([...A[i], b[i]]);
+        
+        for (let i = 0; i < n; i++) {
+            let maxEl = Math.abs(M[i][i]), maxRow = i;
+            for (let k = i + 1; k < n; k++) {
+                if (Math.abs(M[k][i]) > maxEl) { maxEl = Math.abs(M[k][i]); maxRow = k; }
+            }
+            if (maxEl < 1e-12) return null; // singular
+            for (let k = i; k < n + 1; k++) {
+                const tmp = M[maxRow][k]; M[maxRow][k] = M[i][k]; M[i][k] = tmp;
+            }
+            for (let k = i + 1; k < n; k++) {
+                const c = -M[k][i] / M[i][i];
+                for (let j = i; j < n + 1; j++) {
+                    if (i === j) M[k][j] = 0; else M[k][j] += c * M[i][j];
+                }
+            }
+        }
+        
+        const x = new Array(n).fill(0);
+        for (let i = n - 1; i >= 0; i--) {
+            x[i] = M[i][n] / M[i][i];
+            for (let k = i - 1; k >= 0; k--) M[k][n] -= M[k][i] * x[i];
+        }
+        return x;
+    }
+
+    function computeRBF() {
+        const n = pointData.x.length;
+        if (n === 0) return;
+        
+        let sumDist = 0, count = 0;
+        for (let i = 0; i < n; i++) {
+            for (let j = i + 1; j < n; j++) {
+                const dx = pointData.x[i] - pointData.x[j];
+                const dy = pointData.y[i] - pointData.y[j];
+                sumDist += Math.sqrt(dx * dx + dy * dy);
+                count++;
+            }
+        }
+        rbfAverageSpacing = count > 0 ? (sumDist / count) : 10;
+        if (rbfAverageSpacing < 1e-6) rbfAverageSpacing = 1;
+
+        const A = [];
+        const b = [];
+        for (let i = 0; i < n; i++) {
+            A.push(new Array(n).fill(0));
+            b.push(pointData.z[i]);
+            for (let j = 0; j < n; j++) {
+                const dx = pointData.x[i] - pointData.x[j];
+                const dy = pointData.y[i] - pointData.y[j];
+                const r = Math.sqrt(dx * dx + dy * dy);
+                A[i][j] = rbfPhi(r);
+            }
+        }
+        rbfWeights = solveLinearSystem(A, b);
+        if (!rbfWeights) console.warn("RBF system was singular");
+    }
+
+    function evaluateRBF(x, y) {
+        if (!rbfWeights) return 0;
+        let z = 0;
+        for (let i = 0; i < pointData.x.length; i++) {
+            const dx = x - pointData.x[i];
+            const dy = y - pointData.y[i];
+            const r = Math.sqrt(dx * dx + dy * dy);
+            z += rbfWeights[i] * rbfPhi(r);
+        }
+        return z;
     }
 
     // ═══════════════════════════════════════
@@ -585,27 +672,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const vx = positions.getX(i), vz = positions.getZ(i);
             const worldX = cx + (vx / scaleXYZ), worldY = cy - (vz / scaleXYZ);
 
-            // Exact Interpolation using IDW (p=2) instead of smoothing
-            let wSum = 0, zSum = 0;
-            let exact = false;
-            for (let k = 0; k < n; k++) {
-                const dx = worldX - pointData.x[k], dy = worldY - pointData.y[k];
-                const dSq = dx * dx + dy * dy;
-                if (dSq < 1e-12) {
-                    const zExact = pointData.z[k];
-                    const vy = isNormalized ? (zExact * scaleXYZ * 2) : ((zExact - cz) * scaleXYZ * 2);
-                    positions.setY(i, vy);
-                    exact = true;
-                    break;
-                }
-                const w = 1 / dSq;
-                wSum += w; zSum += pointData.z[k] * w;
-            }
-            if (!exact) {
-                const zInterp = wSum > 1e-12 ? zSum / wSum : 0;
-                const vy = isNormalized ? (zInterp * scaleXYZ * 2) : ((zInterp - cz) * scaleXYZ * 2);
-                positions.setY(i, vy);
-            }
+            // Exact Interpolation using Radial Basis Functions
+            const zInterp = evaluateRBF(worldX, worldY);
+            const vy = isNormalized ? (zInterp * scaleXYZ * 2) : ((zInterp - cz) * scaleXYZ * 2);
+            positions.setY(i, vy);
         }
         surfGeo.computeVertexNormals();
 
@@ -1178,23 +1248,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const f = 1 - Math.exp(-minSq / twoSS);
                 let wMean = NaN, sd = -1;
 
-                // 1. Exact Interpolation using IDW (p=2) for Mean Surface
-                let wSumIDW = 0, wzSumIDW = 0;
-                let exact = false;
-                for (let k = 0; k < n; k++) {
-                    const dx = wx - pts.x[k], dy = wy - pts.y[k];
-                    const dSq = dx * dx + dy * dy;
-                    if (dSq < 1e-12) {
-                        wMean = pts.z[k];
-                        exact = true;
-                        break;
-                    }
-                    const w = 1 / dSq;
-                    wSumIDW += w; wzSumIDW += w * pts.z[k];
-                }
-                if (!exact) {
-                    wMean = wSumIDW > 1e-12 ? wzSumIDW / wSumIDW : NaN;
-                }
+                // 1. Exact Interpolation using Radial Basis Functions
+                wMean = evaluateRBF(wx, wy);
 
                 // 2. Variability (StDev) calculation using Tukey weights
                 if (dataPoints.length >= minPts) {
