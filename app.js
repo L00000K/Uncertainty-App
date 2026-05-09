@@ -141,7 +141,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function invalidateLeaflets() {
-        [inputPlanMap, zoiMap, varMap].forEach(m => { if (m) m.invalidateSize(); });
+        [inputPlanMap, zoiMap, varMap, uncertMap].forEach(m => { 
+            if (m) {
+                m.invalidateSize();
+                if (pointData) {
+                    m.fitBounds(leafletBounds(bbox()));
+                }
+            } 
+        });
     }
 
     // ═══════════════════════════════════════
@@ -425,16 +432,18 @@ document.addEventListener('DOMContentLoaded', () => {
             threeScene = new THREE.Scene();
             threeScene.background = new THREE.Color(0xf0f2f5);
 
-            threeCamera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            const w = container.clientWidth || 600;
+            const h = container.clientHeight || 400;
+            threeCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
             threeCamera.position.set(0, 1.5, 2);
 
             threeRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            threeRenderer.setSize(container.clientWidth, container.clientHeight);
+            threeRenderer.setSize(w, h);
             container.innerHTML = '';
             container.appendChild(threeRenderer.domElement);
 
             labelRenderer = new THREE.CSS2DRenderer();
-            labelRenderer.setSize(container.clientWidth, container.clientHeight);
+            labelRenderer.setSize(w, h);
             labelRenderer.domElement.style.position = 'absolute';
             labelRenderer.domElement.style.top = '0px';
             labelRenderer.domElement.style.pointerEvents = 'none';
@@ -747,7 +756,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const sigma = parseFloat(sigmaSlider.value);
         const twoSS = 2 * sigma * sigma;
         const bounds = zoiMap.getBounds(), size = zoiMap.getSize();
-        const W = Math.min(size.x, 300), H = Math.min(size.y, 300);
+        const W = Math.max(10, Math.min(size.x || 300, 300)), H = Math.max(10, Math.min(size.y || 300, 300));
         const south = bounds.getSouth(), west = bounds.getWest(), north = bounds.getNorth(), east = bounds.getEast();
         const sx = (east - west) / W, sy = (north - south) / H;
 
@@ -821,7 +830,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const maxDistSq = maxDist * maxDist;
 
         const bounds = varMap.getBounds(), size = varMap.getSize();
-        const W = Math.min(size.x, 250), H = Math.min(size.y, 250);
+        const W = Math.max(10, Math.min(size.x || 250, 250)), H = Math.max(10, Math.min(size.y || 250, 250));
         const south = bounds.getSouth(), west = bounds.getWest(), north = bounds.getNorth(), east = bounds.getEast();
         const sx = (east - west) / W, sy = (north - south) / H;
 
@@ -954,7 +963,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const zScore = parseFloat(confidenceSelect.value); // 1, 2, or 3
 
         const bounds = uncertMap.getBounds(), size = uncertMap.getSize();
-        const W = Math.min(size.x, 250), H = Math.min(size.y, 250);
+        const W = Math.max(10, Math.min(size.x || 250, 250)), H = Math.max(10, Math.min(size.y || 250, 250));
         const south = bounds.getSouth(), west = bounds.getWest(), north = bounds.getNorth(), east = bounds.getEast();
         const sx = (east - west) / W, sy = (north - south) / H;
 
