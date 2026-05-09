@@ -481,14 +481,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     const id = e.target.id;
                     if (threeMeshes[id]) threeMeshes[id].visible = e.target.checked;
                     
-                    // Auto-hide labels if parent points are turned off
-                    if (id === 'layer-raw-pts' && !e.target.checked) {
+                    // Auto-sync labels when parent points are toggled
+                    if (id === 'layer-raw-pts') {
                         const lbl = document.getElementById('layer-raw-labels');
-                        if (lbl) { lbl.checked = false; if (threeMeshes['layer-raw-labels']) threeMeshes['layer-raw-labels'].visible = false; }
+                        if (lbl) { lbl.checked = e.target.checked; if (threeMeshes['layer-raw-labels']) threeMeshes['layer-raw-labels'].visible = e.target.checked; }
                     }
-                    if (id === 'layer-norm-pts' && !e.target.checked) {
+                    if (id === 'layer-norm-pts') {
                         const lbl = document.getElementById('layer-norm-labels');
-                        if (lbl) { lbl.checked = false; if (threeMeshes['layer-norm-labels']) threeMeshes['layer-norm-labels'].visible = false; }
+                        if (lbl) { lbl.checked = e.target.checked; if (threeMeshes['layer-norm-labels']) threeMeshes['layer-norm-labels'].visible = e.target.checked; }
                     }
                 });
             });
@@ -586,7 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const worldX = cx + (vx / scaleXYZ), worldY = cy - (vz / scaleXYZ);
 
             // Exact Interpolation using IDW (p=2) instead of smoothing
-            let wSum = 0, wzSum = 0;
+            let wSum = 0, zSum = 0;
             let exact = false;
             for (let k = 0; k < n; k++) {
                 const dx = worldX - pointData.x[k], dy = worldY - pointData.y[k];
