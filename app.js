@@ -1183,19 +1183,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Legend layer listeners
         const layerMap = {
-            'layer-f-pts': 'pts', 'layer-f-mean': 'mean',
+            'layer-f-pts': 'pts', 'layer-f-mean': 'mean', 'layer-f-interp': 'interp',
             'layer-f-p1': 'p1', 'layer-f-m1': 'm1',
             'layer-f-p2': 'p2', 'layer-f-m2': 'm2',
             'layer-f-p3': 'p3', 'layer-f-m3': 'm3'
         };
-        if (!fScene._listenersAdded) {
-            Object.entries(layerMap).forEach(([cbId, meshKey]) => {
-                document.getElementById(cbId)?.addEventListener('change', e => {
-                    if (fMeshes[meshKey]) fMeshes[meshKey].visible = e.target.checked;
-                });
-            });
-            fScene._listenersAdded = true;
-        }
+        // Re-attach listeners each render (safe: old meshes are replaced, new fMeshes ref is current)
+        Object.entries(layerMap).forEach(([cbId, meshKey]) => {
+            const el = document.getElementById(cbId);
+            if (!el) return;
+            el.onchange = e => { if (fMeshes[meshKey]) fMeshes[meshKey].visible = e.target.checked; };
+        });
 
         const pts = pointData, n = pts.x.length;
         if (n === 0) return;
@@ -1221,26 +1219,34 @@ document.addEventListener('DOMContentLoaded', () => {
         const minDist = parseFloat(minDistSlider.value), maxDist = parseFloat(maxDistSlider.value);
         const minDistSq = minDist * minDist, maxDistSq = maxDist * maxDist;
 
-        const zMean = [], zP1 = [], zM1 = [], zP2 = [], zM2 = [], zP3 = [], zM3 = [];
+        const zMean = [], zP1 = [], zM1 = [], zP2 = [], zM2 = [], zP3 = [], zM3 = [], zInterp = [];
 
         for (let j = 0; j < gridSize; j++) {
-            const rowMean = [], rowP1 = [], rowM1 = [], rowP2 = [], rowM2 = [], rowP3 = [], rowM3 = [];
+            const rowMean = [], rowP1 = [], rowM1 = [], rowP2 = [], rowM2 = [], rowP3 = [], rowM3 = [], rowInterp = [];
             const wy = minY + j * gsy;
             for (let i = 0; i < gridSize; i++) {
                 const wx = minX + i * gsx;
                 let minSq = Infinity;
+                let idwNum = 0, idwDen = 0, exactZ = null;
                 const dataPoints = [];
                 for (let k = 0; k < n; k++) {
                     const dx = wx - pts.x[k], dy = wy - pts.y[k], dSq = dx * dx + dy * dy;
                     if (dSq < minSq) minSq = dSq;
+                    if (dSq < 1e-8) { exactZ = pts.z[k]; }
+                    else if (dSq <= maxDistSq) {
+                        idwNum += pts.z[k] / dSq;
+                        idwDen += 1 / dSq;
+                    }
                     if (dSq >= minDistSq && dSq <= maxDistSq) dataPoints.push({ z: pts.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
                 }
                 if (Math.sqrt(minSq) > rbfAverageSpacing * 1.5) {
-                    [rowMean,rowP1,rowM1,rowP2,rowM2,rowP3,rowM3].forEach(r => r.push(NaN));
+                    [rowMean,rowP1,rowM1,rowP2,rowM2,rowP3,rowM3,rowInterp].forEach(r => r.push(NaN));
                     continue;
                 }
+                // IDW mean — passes through contacts (exactZ), falls back to RBF in sparse areas
+                const wMean = exactZ !== null ? exactZ : (idwDen > 1e-12 ? idwNum / idwDen : evaluateRBF(wx, wy));
+                const rbfVal = evaluateRBF(wx, wy);
                 const f = 1 - Math.exp(-minSq / twoSS);
-                const wMean = evaluateRBF(wx, wy);
                 let sd = -1;
                 if (dataPoints.length >= minPts) {
                     let wSum = 0, wzSum = 0;
@@ -1255,15 +1261,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!isNaN(wMean) && sd >= 0) {
                     const base = f * sd;
                     rowMean.push(wMean);
+                    rowInterp.push(rbfVal);
                     rowP1.push(wMean + base * 1); rowM1.push(wMean - base * 1);
                     rowP2.push(wMean + base * 2); rowM2.push(wMean - base * 2);
                     rowP3.push(wMean + base * 3); rowM3.push(wMean - base * 3);
                 } else {
-                    [rowMean, rowP1, rowM1, rowP2, rowM2, rowP3, rowM3].forEach(r => r.push(NaN));
+                    [rowMean, rowP1, rowM1, rowP2, rowM2, rowP3, rowM3, rowInterp].forEach(r => r.push(NaN));
                 }
             }
             zMean.push(rowMean); zP1.push(rowP1); zM1.push(rowM1);
-            zP2.push(rowP2); zM2.push(rowM2); zP3.push(rowP3); zM3.push(rowM3);
+            zP2.push(rowP2); zM2.push(rowM2); zP3.push(rowP3); zM3.push(rowM3); zInterp.push(rowInterp);
         }
 
         fClipPlanes = [
@@ -1283,22 +1290,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const cp = fClipPlanes;
-        const matMean = new THREE.MeshLambertMaterial({ color: 0xa855f7, transparent: true, opacity: 0.9, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matP1   = new THREE.MeshLambertMaterial({ color: 0xf97316, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matM1   = new THREE.MeshLambertMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matP2   = new THREE.MeshLambertMaterial({ color: 0xef4444, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
-        const matM2   = new THREE.MeshLambertMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
-        const matP3   = new THREE.MeshLambertMaterial({ color: 0xdc2626, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matM3   = new THREE.MeshLambertMaterial({ color: 0x2563eb, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matPts  = new THREE.MeshLambertMaterial({ color: 0xdc2626, clippingPlanes: cp });
+        const matMean  = new THREE.MeshLambertMaterial({ color: 0xa855f7, transparent: true, opacity: 0.9,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matInterp= new THREE.MeshLambertMaterial({ color: 0x10b981, transparent: true, opacity: 0.7,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP1    = new THREE.MeshLambertMaterial({ color: 0xf97316, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM1    = new THREE.MeshLambertMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP2    = new THREE.MeshLambertMaterial({ color: 0xef4444, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM2    = new THREE.MeshLambertMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP3    = new THREE.MeshLambertMaterial({ color: 0xdc2626, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM3    = new THREE.MeshLambertMaterial({ color: 0x2563eb, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matPts   = new THREE.MeshLambertMaterial({ color: 0xdc2626, clippingPlanes: cp });
 
-        fMeshes.mean = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zMean, matMean);
-        fMeshes.p1   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP1,   matP1);
-        fMeshes.m1   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM1,   matM1);
-        fMeshes.p2   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP2,   matP2);
-        fMeshes.m2   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM2,   matM2);
-        fMeshes.p3   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP3,   matP3);
-        fMeshes.m3   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM3,   matM3);
+        fMeshes.mean   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zMean,   matMean);
+        fMeshes.interp = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zInterp, matInterp);
+        fMeshes.p1     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP1,     matP1);
+        fMeshes.m1     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM1,     matM1);
+        fMeshes.p2     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP2,     matP2);
+        fMeshes.m2     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM2,     matM2);
+        fMeshes.p3     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP3,     matP3);
+        fMeshes.m3     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM3,     matM3);
 
         fMeshes.pts = new THREE.Group();
         const dSpan = Math.max(maxX - minX, maxY - minY) || 1000;
@@ -1320,7 +1329,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateClippingPlanes();
 
         // Store surfaces for DXF export
-        storedSurfaces = { gridSize, minX, gsx: gsx, minY, gsy: gsy, zMean, zP1, zM1, zP2, zM2, zP3, zM3 };
+        storedSurfaces = { gridSize, minX, gsx, minY, gsy, zMean, zInterp, zP1, zM1, zP2, zM2, zP3, zM3 };
     }
 
     function updateClippingPlanes() {
