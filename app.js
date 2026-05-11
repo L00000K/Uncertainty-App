@@ -1,51 +1,78 @@
 document.addEventListener('DOMContentLoaded', () => {
 
     // ═══════════════════════════════════════
+    //  SAMPLE DATA — Branching Paleochannel
+    // ═══════════════════════════════════════
+
+    const SAMPLE_DATA = `Easting,Northing,Elevation
+12.3,8.4,98.12
+48.7,11.2,97.64
+92.1,9.8,98.31
+21.4,24.5,94.20
+68.9,26.1,93.85
+11.2,34.7,88.42
+38.8,36.2,87.91
+82.3,33.9,88.75
+14.5,44.1,78.23
+56.7,46.3,77.41
+86.2,45.5,77.92
+19.1,49.8,75.31
+49.5,50.2,74.88
+74.2,49.1,75.14
+93.8,51.0,75.45
+6.4,54.8,75.62
+31.2,55.9,75.29
+61.8,54.2,76.10
+88.4,56.1,75.55
+9.7,64.5,82.41
+44.3,66.2,81.98
+76.1,65.8,82.12
+24.8,74.5,84.55
+66.2,76.1,84.15
+81.5,74.9,84.81
+11.4,85.2,82.74
+42.1,84.8,83.15
+88.9,86.5,82.68
+18.5,94.2,81.42
+72.3,96.8,80.75`;
+
+    // ═══════════════════════════════════════
     //  DOM REFERENCES
     // ═══════════════════════════════════════
 
     const dropArea = document.getElementById('drop-area');
     const fileInput = document.getElementById('csv-upload');
     const processBtn = document.getElementById('process-btn');
-    const sigmaSlider = document.getElementById('sigma-slider');
-    const sigmaVal = document.getElementById('sigma-value');
-    const minPtsSlider = document.getElementById('min-pts-slider');
-    const minPtsVal = document.getElementById('min-pts-value');
-    const minDistSlider = document.getElementById('min-dist-slider');
-    const minDistVal = document.getElementById('min-dist-value');
-    const maxDistSlider = document.getElementById('max-dist-slider');
-    const maxDistVal = document.getElementById('max-dist-value');
+    const loadSampleBtn = document.getElementById('load-sample-btn');
+    const dataSummaryBtn = document.getElementById('data-summary-btn');
+    const dataSummaryModal = document.getElementById('data-summary-modal');
+    const closeSummaryBtn = document.getElementById('close-summary-btn');
     const normalizeCheck = document.getElementById('normalize-check');
     const trendInfo = document.getElementById('trend-info');
     const trendEquation = document.getElementById('trend-equation');
-    const confidenceSelect = document.getElementById('confidence-select');
 
     const loader = processBtn.querySelector('.loader');
     const btnText = processBtn.querySelector('.btn-text');
 
-    // Taper Helper Function for Local Variablity weights
-    function getVariabilityWeight(dSq, maxDistSq, maxDist) {
-        if (maxDistSq === 0 || maxDist === 0) return 1;
-        const d = Math.sqrt(dSq);
-        const taperStart = 0.8 * maxDist; // 80% flat top
-
-        if (d <= taperStart) return 1;
-        if (d >= maxDist) return 0;
-
-        const phase = ((d - taperStart) / (maxDist - taperStart)) * Math.PI;
-        return 0.5 * (1 + Math.cos(phase));
-    }
-
+    // Sliders + number inputs
+    const sigmaSlider = document.getElementById('sigma-slider');
+    const sigmaNumber = document.getElementById('sigma-number');
+    const minPtsSlider = document.getElementById('min-pts-slider');
+    const minPtsNumber = document.getElementById('min-pts-number');
+    const minDistSlider = document.getElementById('min-dist-slider');
+    const minDistNumber = document.getElementById('min-dist-number');
+    const maxDistSlider = document.getElementById('max-dist-slider');
+    const maxDistNumber = document.getElementById('max-dist-number');
+    const veFinalSlider = document.getElementById('f-ve-slider');
+    const veFinalNumber = document.getElementById('f-ve-number');
     const sliceModeSelect = document.getElementById('slice-mode');
     const sliceAngleSlider = document.getElementById('slice-angle');
-    const sliceAngleVal = document.getElementById('slice-angle-val');
+    const sliceAngleNumber = document.getElementById('slice-angle-number');
     const slicePosSlider = document.getElementById('slice-pos');
-    const slicePosVal = document.getElementById('slice-pos-val');
+    const slicePosNumber = document.getElementById('slice-pos-number');
     const sliceThickSlider = document.getElementById('slice-thick');
-    const sliceThickVal = document.getElementById('slice-thick-val');
+    const sliceThickNumber = document.getElementById('slice-thick-number');
     const sliceThickGroup = document.getElementById('slice-thick-group');
-    const veFinalSlider = document.getElementById('f-ve-slider');
-    const veFinalVal = document.getElementById('f-ve-val');
 
     const stat = {
         pts: document.getElementById('stat-points'),
@@ -54,20 +81,24 @@ document.addEventListener('DOMContentLoaded', () => {
         maxdz: document.getElementById('stat-maxdz'),
     };
 
-    let pointData = null;   // { x:[], y:[], z:[] }
-    let rawZ = null;        // original Z values before normalisation
+    // ─── State ───────────────────────────────
+    let pointData = null;
+    let rawZ = null;
     let globalMaxDist = 1;
     let variogramReady = false;
     let globalTrend = null;
 
+    // Input 3D scene
     let threeScene, threeCamera, threeRenderer, labelRenderer, orbit;
     let threeMeshes = {};
 
+    // Final 3D scene
     let fScene, fCamera, fRenderer, fOrbit;
     let fMeshes = {};
     let fClipPlanes = [];
+    let fBBox = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
 
-    // Leaflet maps — we keep references so we can destroy / rebuild
+    // Leaflet maps
     let inputPlanMap = null;
     let zoiMap = null;
     let varMap = null;
@@ -76,37 +107,79 @@ document.addEventListener('DOMContentLoaded', () => {
     let varOverlay = null;
     let varMarkers = null;
     let uncertMap = null;
-    let uncertOverlay = null;
+    let uncertOverlay1 = null;
+    let uncertOverlay2 = null;
+    let uncertOverlay3 = null;
     let uncertMarkers = null;
+
+    // RBF state
+    let rbfWeights = null;
+    let rbfAverageSpacing = 1;
+
+    // ═══════════════════════════════════════
+    //  HELPERS
+    // ═══════════════════════════════════════
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, isNaN(v) ? lo : v)); }
+
+    function getVariabilityWeight(dSq, maxDistSq, maxDist) {
+        if (maxDistSq === 0 || maxDist === 0) return 1;
+        const d = Math.sqrt(dSq);
+        const taperStart = 0.8 * maxDist;
+        if (d <= taperStart) return 1;
+        if (d >= maxDist) return 0;
+        const phase = ((d - taperStart) / (maxDist - taperStart)) * Math.PI;
+        return 0.5 * (1 + Math.cos(phase));
+    }
+
+    function bbox(pad = 0.15) {
+        const minX = Math.min(...pointData.x), maxX = Math.max(...pointData.x);
+        const minY = Math.min(...pointData.y), maxY = Math.max(...pointData.y);
+        const rX = (maxX - minX) || 1, rY = (maxY - minY) || 1;
+        return {
+            minX: minX - rX * pad, maxX: maxX + rX * pad,
+            minY: minY - rY * pad, maxY: maxY + rY * pad,
+            rawMinX: minX, rawMaxX: maxX, rawMinY: minY, rawMaxY: maxY
+        };
+    }
+
+    function leafletBounds(b) { return [[b.minY, b.minX], [b.maxY, b.maxX]]; }
+
+    function makeLeaflet(containerId, existingMap) {
+        if (existingMap) existingMap.remove();
+        const m = L.map(containerId, { crs: L.CRS.Simple, minZoom: -5, maxZoom: 5, attributionControl: false });
+        m.fitBounds(leafletBounds(bbox()));
+        return m;
+    }
+
+    function uncertaintyColour(f) {
+        const r = Math.round(255 * Math.min(1, f * 2));
+        const g = Math.round(255 * Math.min(1, 2 * (1 - f)));
+        return [r, g, 0];
+    }
+
+    function stdevColour(t) {
+        let r, g, b;
+        if (t < 0.25) { const s = t / 0.25; r = 0; g = Math.round(255 * s); b = 255; }
+        else if (t < 0.5) { const s = (t - 0.25) / 0.25; r = 0; g = 255; b = Math.round(255 * (1 - s)); }
+        else if (t < 0.75) { const s = (t - 0.5) / 0.25; r = Math.round(255 * s); g = 255; b = 0; }
+        else { const s = (t - 0.75) / 0.25; r = 255; g = Math.round(255 * (1 - s)); b = 0; }
+        return [r, g, b];
+    }
+
+    function invalidateLeaflets() {
+        [inputPlanMap, zoiMap, varMap, uncertMap].forEach(m => {
+            if (m) {
+                m.invalidateSize();
+                if (pointData) m.fitBounds(leafletBounds(bbox()));
+            }
+        });
+    }
 
     // ═══════════════════════════════════════
     //  TAB SYSTEM
     // ═══════════════════════════════════════
 
-    function setupTabs(containerSel, btnClass, viewClass) {
-        const btns = document.querySelectorAll(containerSel + ' .' + btnClass);
-        btns.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const parent = btn.closest(containerSel) || btn.parentElement;
-                // find views — siblings in the same primary-view or sub-view-container
-                const primaryView = btn.closest('.primary-view') || document;
-                const views = primaryView.querySelectorAll('.' + viewClass);
-                const sibBtns = parent.querySelectorAll('.' + btnClass);
-
-                sibBtns.forEach(b => b.classList.remove('active'));
-                views.forEach(v => v.classList.remove('active'));
-
-                btn.classList.add('active');
-                const target = document.getElementById(btn.dataset.target);
-                if (target) target.classList.add('active');
-
-                window.dispatchEvent(new Event('resize'));
-                invalidateLeaflets();
-            });
-        });
-    }
-
-    // Sidebar Accordion Steps
     document.querySelectorAll('.sidebar-step .step-title').forEach(title => {
         title.addEventListener('click', () => {
             const step = title.closest('.sidebar-step');
@@ -117,15 +190,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             step.classList.add('active');
             const targetId = step.dataset.target;
-            if (targetId) {
-                document.getElementById(targetId).classList.add('active');
-            }
+            if (targetId) document.getElementById(targetId).classList.add('active');
+
             window.dispatchEvent(new Event('resize'));
             setTimeout(invalidateLeaflets, 120);
         });
     });
 
-    // Sub-tabs inside each primary view
     document.querySelectorAll('.sub-tabs').forEach(container => {
         container.querySelectorAll('.sub-tab-btn').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -140,67 +211,65 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    function invalidateLeaflets() {
-        [inputPlanMap, zoiMap, varMap, uncertMap].forEach(m => { 
-            if (m) {
-                m.invalidateSize();
-                if (pointData) {
-                    m.fitBounds(leafletBounds(bbox()));
-                }
-            } 
+    // ═══════════════════════════════════════
+    //  SLIDER ↔ NUMBER INPUT SYNC
+    // ═══════════════════════════════════════
+
+    function linkSliderNumber(slider, number, onUpdate) {
+        slider.addEventListener('input', () => {
+            number.value = slider.value;
+            onUpdate();
+        });
+        number.addEventListener('input', () => {
+            const v = clamp(parseFloat(number.value), parseFloat(slider.min) || 0, parseFloat(slider.max) || 1e9);
+            slider.value = v;
+            number.value = v;
+            onUpdate();
         });
     }
 
-    // ═══════════════════════════════════════
-    //  SLIDERS
-    // ═══════════════════════════════════════
-
-    sigmaSlider.addEventListener('input', e => {
-        sigmaVal.textContent = e.target.value;
+    linkSliderNumber(sigmaSlider, sigmaNumber, () => {
         if (variogramReady) updateGaussianCurve();
         if (zoiMap && pointData) renderZoiOverlay();
         if (uncertMap && pointData) renderUncertOverlay();
     });
-    minPtsSlider.addEventListener('input', e => {
-        minPtsVal.textContent = e.target.value;
+
+    linkSliderNumber(minPtsSlider, minPtsNumber, () => {
         if (varMap && pointData) renderVariabilityOverlay();
         if (uncertMap && pointData) renderUncertOverlay();
     });
-    minDistSlider.addEventListener('input', e => {
-        minDistVal.textContent = e.target.value;
+
+    linkSliderNumber(minDistSlider, minDistNumber, () => {
         if (varMap && pointData) renderVariabilityOverlay();
         if (uncertMap && pointData) renderUncertOverlay();
     });
-    maxDistSlider.addEventListener('input', e => {
-        maxDistVal.textContent = e.target.value;
+
+    linkSliderNumber(maxDistSlider, maxDistNumber, () => {
         if (varMap && pointData) renderVariabilityOverlay();
         if (uncertMap && pointData) renderUncertOverlay();
     });
-    confidenceSelect.addEventListener('change', () => {
-        if (uncertMap && pointData) renderUncertOverlay();
+
+    linkSliderNumber(veFinalSlider, veFinalNumber, () => {
         if (fScene && pointData) renderFinal3DView();
     });
 
-    veFinalSlider.addEventListener('input', e => {
-        veFinalVal.textContent = e.target.value;
-        if (fScene && pointData) renderFinal3DView();
-    });
+    linkSliderNumber(sliceAngleSlider, sliceAngleNumber, updateClippingPlanes);
+    linkSliderNumber(slicePosSlider, slicePosNumber, updateClippingPlanes);
+    linkSliderNumber(sliceThickSlider, sliceThickNumber, updateClippingPlanes);
 
     sliceModeSelect.addEventListener('change', () => {
         sliceThickGroup.style.display = (sliceModeSelect.value === 'slice') ? 'block' : 'none';
         updateClippingPlanes();
     });
-    sliceAngleSlider.addEventListener('input', e => {
-        sliceAngleVal.textContent = e.target.value;
-        updateClippingPlanes();
-    });
-    slicePosSlider.addEventListener('input', e => {
-        slicePosVal.textContent = e.target.value;
-        updateClippingPlanes();
-    });
-    sliceThickSlider.addEventListener('input', e => {
-        sliceThickVal.textContent = e.target.value;
-        updateClippingPlanes();
+
+    // ═══════════════════════════════════════
+    //  DATA SUMMARY MODAL
+    // ═══════════════════════════════════════
+
+    dataSummaryBtn.addEventListener('click', () => dataSummaryModal.classList.remove('hidden'));
+    closeSummaryBtn.addEventListener('click', () => dataSummaryModal.classList.add('hidden'));
+    dataSummaryModal.addEventListener('click', e => {
+        if (e.target === dataSummaryModal) dataSummaryModal.classList.add('hidden');
     });
 
     // ═══════════════════════════════════════
@@ -224,11 +293,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (pointData && pointData.x.length > 2) {
                     msg.textContent = `${file.name} (${pointData.x.length} pts)`;
                     processBtn.disabled = false;
+                    dataSummaryBtn.disabled = false;
                 } else { msg.textContent = 'Could not parse X, Y, Z columns.'; }
             },
             error() { msg.textContent = 'Error reading file.'; }
         });
     }
+
+    loadSampleBtn.addEventListener('click', () => {
+        rawZ = null;
+        const result = Papa.parse(SAMPLE_DATA, { header: true, dynamicTyping: true, skipEmptyLines: true });
+        parseRows(result.data);
+        if (pointData && pointData.x.length > 2) {
+            dropArea.querySelector('.file-message').textContent = `Sample: Branching Paleochannel (${pointData.x.length} pts)`;
+            processBtn.disabled = false;
+            dataSummaryBtn.disabled = false;
+        }
+    });
 
     function parseRows(data) {
         if (!data.length) return;
@@ -249,13 +330,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ═══════════════════════════════════════
-    //  PROCESS BUTTON
+    //  ERROR HANDLING
     // ═══════════════════════════════════════
 
-    // Remove any previous error banner
-    function clearError() {
-        document.querySelector('.error-banner')?.remove();
-    }
+    function clearError() { document.querySelector('.error-banner')?.remove(); }
     function showError(msg) {
         clearError();
         const div = document.createElement('div');
@@ -263,6 +341,10 @@ document.addEventListener('DOMContentLoaded', () => {
         div.textContent = '⚠ ' + msg;
         processBtn.parentElement.insertBefore(div, processBtn.nextSibling);
     }
+
+    // ═══════════════════════════════════════
+    //  PROCESS BUTTON
+    // ═══════════════════════════════════════
 
     processBtn.addEventListener('click', () => {
         if (!pointData) return;
@@ -297,12 +379,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ═══════════════════════════════════════
 
     function applyNormalisation() {
-        // Always reset Z to original raw values first
-        if (rawZ) {
-            pointData.z = rawZ.slice();
-        } else {
-            rawZ = pointData.z.slice();
-        }
+        if (rawZ) { pointData.z = rawZ.slice(); } else { rawZ = pointData.z.slice(); }
 
         if (!normalizeCheck.checked) {
             trendInfo.classList.add('hidden');
@@ -310,11 +387,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Fit plane: Z = a*X + b*Y + c  via least-squares (normal equations)
         const n = pointData.x.length;
-        let sx = 0, sy = 0, sz = 0;
-        let sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0;
-
+        let sx = 0, sy = 0, sz = 0, sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0;
         for (let i = 0; i < n; i++) {
             const x = pointData.x[i], y = pointData.y[i], z = pointData.z[i];
             sx += x; sy += y; sz += z;
@@ -322,12 +396,7 @@ document.addEventListener('DOMContentLoaded', () => {
             sxz += x * z; syz += y * z;
         }
 
-        // 3x3 system:  [sxx sxy sx] [a]   [sxz]
-        //              [sxy syy sy] [b] = [syz]
-        //              [sx  sy  n ] [c]   [sz ]
-        // Solve via Cramer's rule
         const detA = sxx * (syy * n - sy * sy) - sxy * (sxy * n - sy * sx) + sx * (sxy * sy - syy * sx);
-
         if (Math.abs(detA) < 1e-20) {
             showError('Cannot fit trend plane — data may be collinear.');
             trendInfo.classList.add('hidden');
@@ -338,14 +407,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const b = (sxx * (syz * n - sy * sz) - sxz * (sxy * n - sy * sx) + sx * (sxy * sz - syz * sx)) / detA;
         const c = (sxx * (syy * sz - syz * sy) - sxy * (sxy * sz - syz * sx) + sxz * (sxy * sy - syy * sx)) / detA;
 
-        // Subtract trend: residual = Z - (aX + bY + c)
         const residuals = [];
-        for (let i = 0; i < n; i++) {
-            residuals.push(pointData.z[i] - (a * pointData.x[i] + b * pointData.y[i] + c));
-        }
+        for (let i = 0; i < n; i++) residuals.push(pointData.z[i] - (a * pointData.x[i] + b * pointData.y[i] + c));
         pointData.z = residuals;
 
-        // Display the equation
         const sign = v => v >= 0 ? '+' : '';
         trendEquation.textContent = `Z = ${a.toFixed(6)}·X ${sign(b)}${b.toFixed(6)}·Y ${sign(c)}${c.toFixed(2)}`;
         trendInfo.classList.remove('hidden');
@@ -353,39 +418,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ═══════════════════════════════════════
-    //  RBF INTERPOLATION (Radial Basis Function)
+    //  RBF INTERPOLATION
     // ═══════════════════════════════════════
 
-    let rbfWeights = null;
-    let rbfAverageSpacing = 1;
-
-    function rbfPhi(r) {
-        // Hardy's Multiquadric: smooth, positive definite
-        return Math.sqrt(r * r + rbfAverageSpacing * rbfAverageSpacing);
-    }
+    function rbfPhi(r) { return Math.sqrt(r * r + rbfAverageSpacing * rbfAverageSpacing); }
 
     function solveLinearSystem(A, b) {
         const n = b.length;
         const M = [];
         for (let i = 0; i < n; i++) M.push([...A[i], b[i]]);
-        
         for (let i = 0; i < n; i++) {
             let maxEl = Math.abs(M[i][i]), maxRow = i;
-            for (let k = i + 1; k < n; k++) {
-                if (Math.abs(M[k][i]) > maxEl) { maxEl = Math.abs(M[k][i]); maxRow = k; }
-            }
-            if (maxEl < 1e-12) return null; // singular
-            for (let k = i; k < n + 1; k++) {
-                const tmp = M[maxRow][k]; M[maxRow][k] = M[i][k]; M[i][k] = tmp;
-            }
+            for (let k = i + 1; k < n; k++) { if (Math.abs(M[k][i]) > maxEl) { maxEl = Math.abs(M[k][i]); maxRow = k; } }
+            if (maxEl < 1e-12) return null;
+            for (let k = i; k < n + 1; k++) { const tmp = M[maxRow][k]; M[maxRow][k] = M[i][k]; M[i][k] = tmp; }
             for (let k = i + 1; k < n; k++) {
                 const c = -M[k][i] / M[i][i];
-                for (let j = i; j < n + 1; j++) {
-                    if (i === j) M[k][j] = 0; else M[k][j] += c * M[i][j];
-                }
+                for (let j = i; j < n + 1; j++) { if (i === j) M[k][j] = 0; else M[k][j] += c * M[i][j]; }
             }
         }
-        
         const x = new Array(n).fill(0);
         for (let i = n - 1; i >= 0; i--) {
             x[i] = M[i][n] / M[i][i];
@@ -397,87 +448,37 @@ document.addEventListener('DOMContentLoaded', () => {
     function computeRBF() {
         const n = pointData.x.length;
         if (n === 0) return;
-        
         let sumDist = 0, count = 0;
         for (let i = 0; i < n; i++) {
             for (let j = i + 1; j < n; j++) {
-                const dx = pointData.x[i] - pointData.x[j];
-                const dy = pointData.y[i] - pointData.y[j];
-                sumDist += Math.sqrt(dx * dx + dy * dy);
-                count++;
+                const dx = pointData.x[i] - pointData.x[j], dy = pointData.y[i] - pointData.y[j];
+                sumDist += Math.sqrt(dx * dx + dy * dy); count++;
             }
         }
         rbfAverageSpacing = count > 0 ? (sumDist / count) : 10;
         if (rbfAverageSpacing < 1e-6) rbfAverageSpacing = 1;
 
-        const A = [];
-        const b = [];
+        const A = [], b = [];
         for (let i = 0; i < n; i++) {
             A.push(new Array(n).fill(0));
             b.push(pointData.z[i]);
             for (let j = 0; j < n; j++) {
-                const dx = pointData.x[i] - pointData.x[j];
-                const dy = pointData.y[i] - pointData.y[j];
-                const r = Math.sqrt(dx * dx + dy * dy);
-                A[i][j] = rbfPhi(r);
+                const dx = pointData.x[i] - pointData.x[j], dy = pointData.y[i] - pointData.y[j];
+                A[i][j] = rbfPhi(Math.sqrt(dx * dx + dy * dy));
             }
         }
         rbfWeights = solveLinearSystem(A, b);
-        if (!rbfWeights) console.warn("RBF system was singular");
+        if (!rbfWeights) console.warn('RBF system was singular');
     }
 
     function evaluateRBF(x, y) {
         if (!rbfWeights) return 0;
         let z = 0;
         for (let i = 0; i < pointData.x.length; i++) {
-            const dx = x - pointData.x[i];
-            const dy = y - pointData.y[i];
-            const r = Math.sqrt(dx * dx + dy * dy);
-            z += rbfWeights[i] * rbfPhi(r);
+            const dx = x - pointData.x[i], dy = y - pointData.y[i];
+            z += rbfWeights[i] * rbfPhi(Math.sqrt(dx * dx + dy * dy));
         }
         return z;
-    }
-
-    // ═══════════════════════════════════════
-    //  HELPERS
-    // ═══════════════════════════════════════
-
-    function bbox(pad = 0.15) {
-        const minX = Math.min(...pointData.x), maxX = Math.max(...pointData.x);
-        const minY = Math.min(...pointData.y), maxY = Math.max(...pointData.y);
-        const rX = (maxX - minX) || 1, rY = (maxY - minY) || 1;
-        return {
-            minX: minX - rX * pad, maxX: maxX + rX * pad,
-            minY: minY - rY * pad, maxY: maxY + rY * pad,
-            rawMinX: minX, rawMaxX: maxX, rawMinY: minY, rawMaxY: maxY
-        };
-    }
-
-    function leafletBounds(b) { return [[b.minY, b.minX], [b.maxY, b.maxX]]; }
-
-    function makeLeaflet(containerId, existingMap) {
-        if (existingMap) existingMap.remove();
-        const m = L.map(containerId, { crs: L.CRS.Simple, minZoom: -5, maxZoom: 5, attributionControl: false });
-        m.fitBounds(leafletBounds(bbox()));
-        return m;
-    }
-
-    // Colour ramp: green → yellow → red
-    function uncertaintyColour(f) {
-        const r = Math.round(255 * Math.min(1, f * 2));
-        const g = Math.round(255 * Math.min(1, 2 * (1 - f)));
-        return [r, g, 0];
-    }
-
-    // Colour ramp for StDev: deep blue → cyan → yellow → red
-    function stdevColour(t) {
-        // t in [0,1]
-        let r, g, b;
-        if (t < 0.25) { const s = t / 0.25; r = 0; g = Math.round(255 * s); b = 255; }
-        else if (t < 0.5) { const s = (t - 0.25) / 0.25; r = 0; g = 255; b = Math.round(255 * (1 - s)); }
-        else if (t < 0.75) { const s = (t - 0.5) / 0.25; r = Math.round(255 * s); g = 255; b = 0; }
-        else { const s = (t - 0.75) / 0.25; r = 255; g = Math.round(255 * (1 - s)); b = 0; }
-        return [r, g, b];
     }
 
     // ═══════════════════════════════════════
@@ -490,16 +491,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         for (let i = 0; i < pointData.x.length; i++) {
             const zVal = rawZ ? rawZ[i] : pointData.z[i];
-
-            // Use the red diamond class
             const diamondIcon = L.divIcon({ className: 'leaflet-marker-diamond', iconSize: [10, 10] });
             L.marker([pointData.y[i], pointData.x[i]], { icon: diamondIcon }).addTo(inputPlanMap);
-
-            // Permanent elevation label (always original elevation)
-            L.tooltip({
-                permanent: true, direction: 'right', offset: [8, 0],
-                className: 'elevation-label'
-            })
+            L.tooltip({ permanent: true, direction: 'right', offset: [8, 0], className: 'elevation-label' })
                 .setContent(zVal.toFixed(2))
                 .setLatLng([pointData.y[i], pointData.x[i]])
                 .addTo(inputPlanMap);
@@ -519,8 +513,7 @@ document.addEventListener('DOMContentLoaded', () => {
             threeScene = new THREE.Scene();
             threeScene.background = new THREE.Color(0xf0f2f5);
 
-            const w = container.clientWidth || 600;
-            const h = container.clientHeight || 400;
+            const w = container.clientWidth || 600, h = container.clientHeight || 400;
             threeCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
             threeCamera.position.set(0, 1.5, 2);
 
@@ -543,7 +536,6 @@ document.addEventListener('DOMContentLoaded', () => {
             light.position.set(1, 2, 1);
             threeScene.add(light);
             threeScene.add(new THREE.AmbientLight(0x404040, 2));
-
             threeScene.add(new THREE.AxesHelper(1));
 
             function animate() {
@@ -567,8 +559,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 chk.addEventListener('change', e => {
                     const id = e.target.id;
                     if (threeMeshes[id]) threeMeshes[id].visible = e.target.checked;
-                    
-                    // Auto-sync labels when parent points are toggled
                     if (id === 'layer-raw-pts') {
                         const lbl = document.getElementById('layer-raw-labels');
                         if (lbl) { lbl.checked = e.target.checked; if (threeMeshes['layer-raw-labels']) threeMeshes['layer-raw-labels'].visible = e.target.checked; }
@@ -586,19 +576,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const b = bbox(0.05);
-        const cx = (b.rawMinX + b.rawMaxX) / 2;
-        const cy = (b.rawMinY + b.rawMaxY) / 2;
+        const cx = (b.rawMinX + b.rawMaxX) / 2, cy = (b.rawMinY + b.rawMaxY) / 2;
         const scaleXYZ = 1.0 / Math.max(b.rawMaxX - b.rawMinX, b.rawMaxY - b.rawMinY);
         const n = pointData.x.length;
         const isNormalized = normalizeCheck.checked;
 
-        threeMeshes['layer-raw-pts'] = new THREE.Group();
-        threeMeshes['layer-raw-labels'] = new THREE.Group();
-        threeMeshes['layer-norm-plane'] = new THREE.Group();
-        threeMeshes['layer-norm-pts'] = new THREE.Group();
-        threeMeshes['layer-norm-labels'] = new THREE.Group();
-        threeMeshes['layer-interpolated'] = new THREE.Group();
-        Object.values(threeMeshes).forEach(m => threeScene.add(m));
+        ['layer-raw-pts', 'layer-raw-labels', 'layer-norm-plane', 'layer-norm-pts', 'layer-norm-labels', 'layer-interpolated'].forEach(id => {
+            threeMeshes[id] = new THREE.Group();
+            threeScene.add(threeMeshes[id]);
+        });
 
         const sphereGeo = new THREE.SphereGeometry(0.0075, 16, 16);
         const rawMat = new THREE.MeshLambertMaterial({ color: 0xdc2626 });
@@ -626,7 +612,7 @@ document.addEventListener('DOMContentLoaded', () => {
             threeMeshes['layer-raw-labels'].add(rawLabel);
 
             if (isNormalized) {
-                const pzNorm = (pointData.z[i]) * scaleXYZ * 2;
+                const pzNorm = pointData.z[i] * scaleXYZ * 2;
                 const normMesh = new THREE.Mesh(sphereGeo, normMat);
                 normMesh.position.set(px, pzNorm, py);
                 threeMeshes['layer-norm-pts'].add(normMesh);
@@ -656,32 +642,24 @@ document.addEventListener('DOMContentLoaded', () => {
             cGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
             cGeo.computeVertexNormals();
             const pMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, opacity: 0.2, transparent: true, side: THREE.DoubleSide });
-            const cMesh = new THREE.Mesh(cGeo, pMat);
-            threeMeshes['layer-norm-plane'].add(cMesh);
+            threeMeshes['layer-norm-plane'].add(new THREE.Mesh(cGeo, pMat));
         }
 
         const res = 40;
-        const sigma3d = globalMaxDist / 3 || 200;
-        const twoSS = 2 * sigma3d * sigma3d;
         const w = (b.rawMaxX - b.rawMinX) * scaleXYZ, h = (b.rawMaxY - b.rawMinY) * scaleXYZ;
         const surfGeo = new THREE.PlaneGeometry(w, h, res - 1, res - 1);
         surfGeo.rotateX(-Math.PI / 2);
-
         const positions = surfGeo.attributes.position;
         for (let i = 0; i < positions.count; i++) {
             const vx = positions.getX(i), vz = positions.getZ(i);
             const worldX = cx + (vx / scaleXYZ), worldY = cy - (vz / scaleXYZ);
-
-            // Exact Interpolation using Radial Basis Functions
             const zInterp = evaluateRBF(worldX, worldY);
             const vy = isNormalized ? (zInterp * scaleXYZ * 2) : ((zInterp - cz) * scaleXYZ * 2);
             positions.setY(i, vy);
         }
         surfGeo.computeVertexNormals();
-
         const surfMat = new THREE.MeshLambertMaterial({ color: 0x8b5cf6, side: THREE.DoubleSide, opacity: 0.8, transparent: true });
-        const surfMesh = new THREE.Mesh(surfGeo, surfMat);
-        threeMeshes['layer-interpolated'].add(surfMesh);
+        threeMeshes['layer-interpolated'].add(new THREE.Mesh(surfGeo, surfMat));
 
         ['layer-raw-pts', 'layer-raw-labels', 'layer-norm-plane', 'layer-norm-pts', 'layer-norm-labels', 'layer-interpolated'].forEach(id => {
             const cb = document.getElementById(id);
@@ -714,18 +692,19 @@ document.addEventListener('DOMContentLoaded', () => {
         stat.maxdz.textContent = maxZ.toFixed(2) + ' m';
 
         sigmaSlider.max = Math.ceil(maxD);
+        sigmaNumber.max = Math.ceil(maxD);
         sigmaSlider.value = Math.ceil(maxD / 3);
-        sigmaVal.textContent = sigmaSlider.value;
+        sigmaNumber.value = sigmaSlider.value;
 
         maxDistSlider.max = Math.ceil(maxD);
+        maxDistNumber.max = Math.ceil(maxD);
         maxDistSlider.value = Math.min(parseInt(maxDistSlider.value), Math.ceil(maxD));
-        maxDistVal.textContent = maxDistSlider.value;
+        maxDistNumber.value = maxDistSlider.value;
         minDistSlider.max = Math.ceil(maxD / 2);
+        minDistNumber.max = Math.ceil(maxD / 2);
 
-        // Binned Upper Bound (95th Percentile)
         const nBins = 50, binSz = maxD / nBins;
         const bins = Array.from({ length: nBins }, () => ({ sumDist: 0, dzs: [] }));
-
         for (let i = 0; i < sDist.length; i++) {
             const idx = Math.min(Math.floor(sDist[i] / binSz), nBins - 1);
             bins[idx].sumDist += sDist[i];
@@ -737,8 +716,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (bins[i].dzs.length > 0) {
                 bX.push(bins[i].sumDist / bins[i].dzs.length);
                 bins[i].dzs.sort((a, b) => a - b);
-                const p95Idx = Math.min(Math.floor(bins[i].dzs.length * 0.95), bins[i].dzs.length - 1);
-                bY.push(bins[i].dzs[p95Idx]);
+                bY.push(bins[i].dzs[Math.min(Math.floor(bins[i].dzs.length * 0.95), bins[i].dzs.length - 1)]);
             }
         }
 
@@ -747,31 +725,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderVariogramPlot(sDist, sDZ, bX, bY) {
         document.querySelector('#zoi-variogram .empty-state')?.remove();
-
-        const t1 = {
-            x: sDist, y: sDZ, mode: 'markers', type: sDist.length > 50000 ? 'scattergl' : 'scatter',
-            marker: { color: 'rgba(37,99,235,0.4)', size: 5 }, name: 'Pairwise ΔZ', yaxis: 'y'
-        };
-        const t2 = {
-            x: bX, y: bY, mode: 'lines+markers', type: 'scatter',
-            marker: { color: '#dc2626', size: 6 }, line: { color: '#dc2626', width: 2, dash: 'dot' }, name: '95% Upper Bound', yaxis: 'y'
-        };
+        const t1 = { x: sDist, y: sDZ, mode: 'markers', type: sDist.length > 50000 ? 'scattergl' : 'scatter', marker: { color: 'rgba(37,99,235,0.4)', size: 5 }, name: 'Pairwise ΔZ', yaxis: 'y' };
+        const t2 = { x: bX, y: bY, mode: 'lines+markers', type: 'scatter', marker: { color: '#dc2626', size: 6 }, line: { color: '#dc2626', width: 2, dash: 'dot' }, name: '95% Upper Bound', yaxis: 'y' };
         const t3 = { x: [0], y: [0], mode: 'lines', type: 'scatter', line: { color: '#16a34a', width: 3 }, name: 'f(d)', yaxis: 'y2' };
-
         const layout = {
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             font: { color: '#1a1a2e', family: 'Inter' }, margin: { t: 35, l: 55, r: 55, b: 45 },
             title: { text: 'Pairwise ΔZ vs. Distance  |  Uncertainty Function', font: { size: 13 } },
             xaxis: { title: 'Distance (m)', gridcolor: '#e5e7eb', zerolinecolor: '#d1d5db' },
             yaxis: { title: '|ΔZ| (m)', gridcolor: '#e5e7eb', zerolinecolor: '#d1d5db', rangemode: 'tozero', side: 'left' },
-            yaxis2: {
-                title: 'f(d)', overlaying: 'y', side: 'right', range: [0, 1.05],
-                gridcolor: 'rgba(22,163,74,0.1)', zerolinecolor: '#d1d5db',
-                tickfont: { color: '#16a34a' }, titlefont: { color: '#16a34a' }
-            },
+            yaxis2: { title: 'f(d)', overlaying: 'y', side: 'right', range: [0, 1.05], gridcolor: 'rgba(22,163,74,0.1)', zerolinecolor: '#d1d5db', tickfont: { color: '#16a34a' }, titlefont: { color: '#16a34a' } },
             showlegend: true, legend: { x: .02, y: .98, bgcolor: 'rgba(255,255,255,0.8)' }
         };
-
         Plotly.newPlot('plotly-variogram', [t1, t2, t3], layout, { responsive: true, displayModeBar: true });
         variogramReady = true;
         updateGaussianCurve();
@@ -795,9 +760,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         zoiMarkers = L.featureGroup().addTo(zoiMap);
         for (let i = 0; i < pointData.x.length; i++) {
-            L.circleMarker([pointData.y[i], pointData.x[i]], {
-                radius: 4, color: '#1a1a2e', weight: 1.5, fillColor: '#2563eb', fillOpacity: 1
-            }).addTo(zoiMarkers);
+            L.circleMarker([pointData.y[i], pointData.x[i]], { radius: 4, color: '#1a1a2e', weight: 1.5, fillColor: '#2563eb', fillOpacity: 1 }).addTo(zoiMarkers);
         }
 
         renderZoiOverlay();
@@ -807,13 +770,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const legend = L.control({ position: 'bottomright' });
             legend.onAdd = function () {
                 const div = L.DomUtil.create('div', 'info legend');
-                div.style.background = 'rgba(255,255,255,0.9)';
-                div.style.padding = '8px';
-                div.style.borderRadius = '6px';
-                div.style.fontSize = '12px';
-                div.innerHTML = `<b>Uncertainty f(d)</b><br>
-                                 <i style="background: linear-gradient(to right, rgb(0,255,0), rgb(255,255,0), rgb(255,0,0)); width: 100px; height: 12px; display: inline-block; margin-top: 4px;"></i><br>
-                                 <span style="float:left; font-weight:600;">0 &nbsp;</span> <span style="float:right; font-weight:600;">&nbsp; 1</span>`;
+                div.style.cssText = 'background:rgba(255,255,255,0.9);padding:8px;border-radius:6px;font-size:12px;';
+                div.innerHTML = `<b>Uncertainty f(d)</b><br><i style="background:linear-gradient(to right,rgb(0,255,0),rgb(255,255,0),rgb(255,0,0));width:100px;height:12px;display:inline-block;margin-top:4px;"></i><br><span style="float:left;font-weight:600;">0 </span><span style="float:right;font-weight:600;"> 1</span>`;
                 return div;
             };
             legend.addTo(zoiMap);
@@ -823,8 +781,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderZoiOverlay() {
         if (!zoiMap || !pointData) return;
-        const sigma = parseFloat(sigmaSlider.value);
-        const twoSS = 2 * sigma * sigma;
+        const sigma = parseFloat(sigmaSlider.value), twoSS = 2 * sigma * sigma;
         const bounds = zoiMap.getBounds(), size = zoiMap.getSize();
         const W = Math.max(10, Math.min(size.x || 300, 300)), H = Math.max(10, Math.min(size.y || 300, 300));
         const south = bounds.getSouth(), west = bounds.getWest(), north = bounds.getNorth(), east = bounds.getEast();
@@ -864,9 +821,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         varMarkers = L.featureGroup().addTo(varMap);
         for (let i = 0; i < pointData.x.length; i++) {
-            L.circleMarker([pointData.y[i], pointData.x[i]], {
-                radius: 4, color: '#1a1a2e', weight: 1.5, fillColor: '#2563eb', fillOpacity: 1
-            }).addTo(varMarkers);
+            L.circleMarker([pointData.y[i], pointData.x[i]], { radius: 4, color: '#1a1a2e', weight: 1.5, fillColor: '#2563eb', fillOpacity: 1 }).addTo(varMarkers);
         }
 
         renderVariabilityOverlay();
@@ -876,13 +831,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const legend = L.control({ position: 'bottomright' });
             legend.onAdd = function () {
                 const div = L.DomUtil.create('div', 'info legend');
-                div.style.background = 'rgba(255,255,255,0.9)';
-                div.style.padding = '8px';
-                div.style.borderRadius = '6px';
-                div.style.fontSize = '12px';
-                div.innerHTML = `<b>Variability (StDev)</b><br>
-                                 <i style="background: linear-gradient(to right, rgb(0,255,0), rgb(255,255,0), rgb(255,0,0)); width: 100px; height: 12px; display: inline-block; margin-top: 4px;"></i><br>
-                                 <span style="float:left; font-weight:600;">0 &nbsp;</span> <span style="float:right; font-weight:600;" id="var-legend-max">...</span>`;
+                div.style.cssText = 'background:rgba(255,255,255,0.9);padding:8px;border-radius:6px;font-size:12px;';
+                div.innerHTML = `<b>Variability (StDev)</b><br><i style="background:linear-gradient(to right,rgb(0,0,255),rgb(0,255,255),rgb(255,255,0),rgb(255,0,0));width:100px;height:12px;display:inline-block;margin-top:4px;"></i><br><span style="float:left;font-weight:600;">0 </span><span style="float:right;font-weight:600;" id="var-legend-max">...</span>`;
                 return div;
             };
             legend.addTo(varMap);
@@ -892,12 +842,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderVariabilityOverlay() {
         if (!varMap || !pointData) return;
-
         const minPts = parseInt(minPtsSlider.value);
-        const minDist = parseFloat(minDistSlider.value);
-        const maxDist = parseFloat(maxDistSlider.value);
-        const minDistSq = minDist * minDist;
-        const maxDistSq = maxDist * maxDist;
+        const minDist = parseFloat(minDistSlider.value), maxDist = parseFloat(maxDistSlider.value);
+        const minDistSq = minDist * minDist, maxDistSq = maxDist * maxDist;
 
         const bounds = varMap.getBounds(), size = varMap.getSize();
         const W = Math.max(10, Math.min(size.x || 250, 250)), H = Math.max(10, Math.min(size.y || 250, 250));
@@ -909,69 +856,43 @@ document.addEventListener('DOMContentLoaded', () => {
         const img = ctx.createImageData(W, H);
         const px = img.data;
         const n = pointData.x.length;
-
         let globalMaxStd = 0;
-
-        // First pass: compute stdev grid
         const stdevGrid = new Float64Array(W * H);
 
         for (let py = 0; py < H; py++) {
             const wy = north - py * sy;
             for (let pxx = 0; pxx < W; pxx++) {
                 const wx = west + pxx * sx;
-
-                // Gather elevations and bisquare weights of contacts within [minDist, maxDist]
                 const dataPoints = [];
                 for (let k = 0; k < n; k++) {
                     const dx = wx - pointData.x[k], dy = wy - pointData.y[k];
                     const dSq = dx * dx + dy * dy;
-                    if (dSq >= minDistSq && dSq <= maxDistSq) {
-                        const w = getVariabilityWeight(dSq, maxDistSq, maxDist);
-                        dataPoints.push({ z: pointData.z[k], w: w });
-                    }
+                    if (dSq >= minDistSq && dSq <= maxDistSq) dataPoints.push({ z: pointData.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
                 }
-
                 let sd = -1;
                 if (dataPoints.length >= minPts) {
-                    // Compute weighted mean and weighted standard deviation
-                    let wSum = 0;
-                    let wzSum = 0;
-                    for (let p of dataPoints) {
-                        wSum += p.w;
-                        wzSum += p.w * p.z;
-                    }
+                    let wSum = 0, wzSum = 0;
+                    for (let p of dataPoints) { wSum += p.w; wzSum += p.w * p.z; }
                     if (wSum > 1e-12) {
                         const wMean = wzSum / wSum;
                         let varSum = 0;
-                        for (let p of dataPoints) {
-                            varSum += p.w * (p.z - wMean) * (p.z - wMean);
-                        }
+                        for (let p of dataPoints) varSum += p.w * (p.z - wMean) ** 2;
                         sd = Math.sqrt(varSum / wSum);
                         if (sd > globalMaxStd) globalMaxStd = sd;
                     }
                 }
-
                 stdevGrid[py * W + pxx] = sd;
             }
         }
 
-        // Second pass: colour pixels (normalise by global max)
         for (let py = 0; py < H; py++) {
             for (let pxx = 0; pxx < W; pxx++) {
                 const idx = (py * W + pxx) * 4;
                 const sd = stdevGrid[py * W + pxx];
-
-                if (sd < 0) {
-                    // Insufficient points — render dark semi-transparent
-                    px[idx] = 200; px[idx + 1] = 200; px[idx + 2] = 210; px[idx + 3] = 120;
-                } else {
-                    const t = globalMaxStd > 0 ? sd / globalMaxStd : 0;
-                    const [r, g, b] = stdevColour(t);
-                    px[idx] = r; px[idx + 1] = g; px[idx + 2] = b; px[idx + 3] = 200;
-                }
+                if (sd < 0) { px[idx] = 200; px[idx + 1] = 200; px[idx + 2] = 210; px[idx + 3] = 120; }
+                else { const t = globalMaxStd > 0 ? sd / globalMaxStd : 0; const [r, g, b] = stdevColour(t); px[idx] = r; px[idx + 1] = g; px[idx + 2] = b; px[idx + 3] = 200; }
             }
         }
-
         ctx.putImageData(img, 0, 0);
 
         if (varOverlay) varMap.removeLayer(varOverlay);
@@ -983,167 +904,147 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ═══════════════════════════════════════
-    //  6. UNCERTAINTY — MAP
+    //  6. UNCERTAINTY — MULTI-SIGMA MAP
     // ═══════════════════════════════════════
 
     function initUncertMap() {
         document.querySelector('#uncertainty-map-container .empty-state')?.remove();
         uncertMap = makeLeaflet('uncertainty-map-container', uncertMap);
+        document.getElementById('uncert-2d-legend').classList.remove('hidden');
 
         uncertMarkers = L.featureGroup().addTo(uncertMap);
         for (let i = 0; i < pointData.x.length; i++) {
-            L.circleMarker([pointData.y[i], pointData.x[i]], {
-                radius: 4, color: '#1a1a2e', weight: 1.5, fillColor: '#2563eb', fillOpacity: 1
-            }).addTo(uncertMarkers);
+            L.circleMarker([pointData.y[i], pointData.x[i]], { radius: 4, color: '#1a1a2e', weight: 1.5, fillColor: '#2563eb', fillOpacity: 1 }).addTo(uncertMarkers);
         }
 
         renderUncertOverlay();
         uncertMap.on('moveend', renderUncertOverlay);
 
-        if (!uncertMap.legendControl) {
-            const legend = L.control({ position: 'bottomright' });
-            legend.onAdd = function () {
-                const div = L.DomUtil.create('div', 'info legend');
-                div.style.background = 'rgba(255,255,255,0.9)';
-                div.style.padding = '8px';
-                div.style.borderRadius = '6px';
-                div.style.fontSize = '12px';
-                div.innerHTML = `<b>Uncertainty</b><br>
-                                 <i style="background: linear-gradient(to right, rgb(0,255,0), rgb(255,255,0), rgb(255,0,0)); width: 100px; height: 12px; display: inline-block; margin-top: 4px;"></i><br>
-                                 <span style="float:left; font-weight:600;">0 &nbsp;</span> <span style="float:right; font-weight:600;" id="uncert-legend-max">...</span>`;
-                return div;
-            };
-            legend.addTo(uncertMap);
-            uncertMap.legendControl = legend;
+        // Sigma layer toggle listeners (set up once)
+        if (!uncertMap._sigmaListeners) {
+            document.getElementById('layer-u-1s')?.addEventListener('change', e => {
+                if (uncertOverlay1) uncertOverlay1.setOpacity(e.target.checked ? 0.8 : 0);
+            });
+            document.getElementById('layer-u-2s')?.addEventListener('change', e => {
+                if (uncertOverlay2) uncertOverlay2.setOpacity(e.target.checked ? 0.8 : 0);
+            });
+            document.getElementById('layer-u-3s')?.addEventListener('change', e => {
+                if (uncertOverlay3) uncertOverlay3.setOpacity(e.target.checked ? 0.8 : 0);
+            });
+            uncertMap._sigmaListeners = true;
         }
     }
 
     function renderUncertOverlay() {
         if (!uncertMap || !pointData) return;
 
-        const sigma = parseFloat(sigmaSlider.value);
-        const twoSS = 2 * sigma * sigma;
-
+        const sigma = parseFloat(sigmaSlider.value), twoSS = 2 * sigma * sigma;
         const minPts = parseInt(minPtsSlider.value);
-        const minDist = parseFloat(minDistSlider.value);
-        const maxDist = parseFloat(maxDistSlider.value);
-        const minDistSq = minDist * minDist;
-        const maxDistSq = maxDist * maxDist;
-
-        const zScore = parseFloat(confidenceSelect.value); // 1, 2, or 3
+        const minDist = parseFloat(minDistSlider.value), maxDist = parseFloat(maxDistSlider.value);
+        const minDistSq = minDist * minDist, maxDistSq = maxDist * maxDist;
 
         const bounds = uncertMap.getBounds(), size = uncertMap.getSize();
         const W = Math.max(10, Math.min(size.x || 250, 250)), H = Math.max(10, Math.min(size.y || 250, 250));
         const south = bounds.getSouth(), west = bounds.getWest(), north = bounds.getNorth(), east = bounds.getEast();
         const sx = (east - west) / W, sy = (north - south) / H;
-
-        const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H;
-        const ctx = canvas.getContext('2d');
-        const img = ctx.createImageData(W, H);
-        const px = img.data;
         const n = pointData.x.length;
 
-        let globalMaxUncert = 0;
-        const uncertGrid = new Float64Array(W * H);
+        let globalMaxBase = 0;
+        const baseGrid = new Float64Array(W * H);
 
+        // Compute base uncertainty I*V (no z-score)
         for (let py = 0; py < H; py++) {
             const wy = north - py * sy;
             for (let pxx = 0; pxx < W; pxx++) {
                 const wx = west + pxx * sx;
-
                 let minSq = Infinity;
                 const dataPoints = [];
-
                 for (let k = 0; k < n; k++) {
                     const dx = wx - pointData.x[k], dy = wy - pointData.y[k];
                     const dSq = dx * dx + dy * dy;
-
-                    // for ZOI nearest point distance
                     if (dSq < minSq) minSq = dSq;
-
-                    // for Variability flat-top weight
-                    if (dSq >= minDistSq && dSq <= maxDistSq) {
-                        const w = getVariabilityWeight(dSq, maxDistSq, maxDist);
-                        dataPoints.push({ z: pointData.z[k], w: w });
-                    }
+                    if (dSq >= minDistSq && dSq <= maxDistSq) dataPoints.push({ z: pointData.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
                 }
-
-                // 1) Zone of influence function
                 const f = 1 - Math.exp(-minSq / twoSS);
-
-                // 2) Moving StDev
                 let sd = -1;
                 if (dataPoints.length >= minPts) {
-                    let wSum = 0;
-                    let wzSum = 0;
-                    for (let p of dataPoints) {
-                        wSum += p.w;
-                        wzSum += p.w * p.z;
-                    }
+                    let wSum = 0, wzSum = 0;
+                    for (let p of dataPoints) { wSum += p.w; wzSum += p.w * p.z; }
                     if (wSum > 1e-12) {
                         const wMean = wzSum / wSum;
                         let varSum = 0;
-                        for (let p of dataPoints) {
-                            varSum += p.w * (p.z - wMean) * (p.z - wMean);
-                        }
+                        for (let p of dataPoints) varSum += p.w * (p.z - wMean) ** 2;
                         sd = Math.sqrt(varSum / wSum);
                     }
                 }
-
-                // 3) Combined Uncertainty = I * V * Z-Score
                 if (sd >= 0) {
-                    const uncert = f * sd * zScore;
-                    uncertGrid[py * W + pxx] = uncert;
-                    if (uncert > globalMaxUncert) globalMaxUncert = uncert;
+                    const base = f * sd;
+                    baseGrid[py * W + pxx] = base;
+                    if (base > globalMaxBase) globalMaxBase = base;
                 } else {
-                    uncertGrid[py * W + pxx] = -1;
+                    baseGrid[py * W + pxx] = -1;
                 }
             }
         }
 
-        // Output colors
-        for (let py = 0; py < H; py++) {
-            for (let pxx = 0; pxx < W; pxx++) {
-                const idx = (py * W + pxx) * 4;
-                const u = uncertGrid[py * W + pxx];
+        const lBounds = [[south, west], [north, east]];
+        const maxRef = globalMaxBase * 3 || 1; // normalise to 3σ maximum
 
-                if (u < 0 || globalMaxUncert === 0) {
-                    // lack of data
-                    px[idx] = 200; px[idx + 1] = 200; px[idx + 2] = 210; px[idx + 3] = 120;
-                } else {
-                    const normU = u / globalMaxUncert;
-                    const [r, g, b] = uncertaintyColour(normU);
-                    px[idx] = r; px[idx + 1] = g; px[idx + 2] = b; px[idx + 3] = 200;
+        function makeCanvas(sigmaFactor, colorFn) {
+            const c = document.createElement('canvas'); c.width = W; c.height = H;
+            const ctx = c.getContext('2d');
+            const img = ctx.createImageData(W, H);
+            const px = img.data;
+            for (let py = 0; py < H; py++) {
+                for (let pxx = 0; pxx < W; pxx++) {
+                    const idx = (py * W + pxx) * 4;
+                    const base = baseGrid[py * W + pxx];
+                    if (base < 0) { px[idx] = 200; px[idx+1] = 200; px[idx+2] = 210; px[idx+3] = 50; }
+                    else {
+                        const t = Math.min(1, (base * sigmaFactor) / maxRef);
+                        const [r, g, b, a] = colorFn(t);
+                        px[idx] = r; px[idx+1] = g; px[idx+2] = b; px[idx+3] = a;
+                    }
                 }
             }
+            ctx.putImageData(img, 0, 0);
+            return c;
         }
 
-        ctx.putImageData(img, 0, 0);
+        // Color functions: RGBA, normalized to 3σ max
+        const col1s = t => [59, 130, 246, Math.round(15 + t * 165)];   // blue
+        const col2s = t => [168, 85, 247, Math.round(15 + t * 165)];   // purple
+        const col3s = t => [239, 68, 68, Math.round(15 + t * 165)];    // red
 
-        if (uncertOverlay) uncertMap.removeLayer(uncertOverlay);
-        uncertOverlay = L.imageOverlay(canvas.toDataURL(), [[south, west], [north, east]], { opacity: 0.8, interactive: false }).addTo(uncertMap);
+        const show1s = document.getElementById('layer-u-1s')?.checked ?? true;
+        const show2s = document.getElementById('layer-u-2s')?.checked ?? true;
+        const show3s = document.getElementById('layer-u-3s')?.checked ?? false;
+
+        if (uncertOverlay1) uncertMap.removeLayer(uncertOverlay1);
+        if (uncertOverlay2) uncertMap.removeLayer(uncertOverlay2);
+        if (uncertOverlay3) uncertMap.removeLayer(uncertOverlay3);
+
+        uncertOverlay1 = L.imageOverlay(makeCanvas(1, col1s).toDataURL(), lBounds, { opacity: show1s ? 0.8 : 0, interactive: false }).addTo(uncertMap);
+        uncertOverlay2 = L.imageOverlay(makeCanvas(2, col2s).toDataURL(), lBounds, { opacity: show2s ? 0.8 : 0, interactive: false }).addTo(uncertMap);
+        uncertOverlay3 = L.imageOverlay(makeCanvas(3, col3s).toDataURL(), lBounds, { opacity: show3s ? 0.8 : 0, interactive: false }).addTo(uncertMap);
+
         if (uncertMarkers) uncertMarkers.bringToFront();
 
-        const uncertMaxSpan = document.getElementById('uncert-legend-max');
-        if (uncertMaxSpan) uncertMaxSpan.innerHTML = `&nbsp; ${globalMaxUncert.toFixed(2)}`;
+        const statsEl = document.getElementById('uncert-legend-stats');
+        if (statsEl) statsEl.textContent = `1σ max: ${globalMaxBase.toFixed(3)}m | 3σ max: ${(globalMaxBase * 3).toFixed(3)}m`;
     }
 
     // ═══════════════════════════════════════
-    //  7. FINAL 3D VIEWER
+    //  7. FINAL 3D VIEWER — MULTI-SIGMA
     // ═══════════════════════════════════════
-
-    // Bounding Box state for the final view
-    let fBBox = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
 
     function renderFinal3DView() {
         const container = document.getElementById('final-3d-plot');
         if (!pointData) return;
 
-        // Cleanup empty state if present
         container.querySelector('.empty-state')?.remove();
         document.getElementById('final-3d-legend').classList.remove('hidden');
 
-        // Init Scene
         if (!fScene) {
             fScene = new THREE.Scene();
             fScene.background = new THREE.Color(0xf1f5f9);
@@ -1154,20 +1055,18 @@ document.addEventListener('DOMContentLoaded', () => {
             fRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             fRenderer.setSize(w, h);
             fRenderer.setPixelRatio(window.devicePixelRatio);
-            fRenderer.localClippingEnabled = true; // Crucial for slicing
+            fRenderer.localClippingEnabled = true;
             container.innerHTML = '';
             container.appendChild(fRenderer.domElement);
 
             fOrbit = new THREE.OrbitControls(fCamera, fRenderer.domElement);
             fOrbit.enableDamping = true;
 
-            const ambLight = new THREE.AmbientLight(0xffffff, 0.7);
-            fScene.add(ambLight);
+            fScene.add(new THREE.AmbientLight(0xffffff, 0.7));
             const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
             dirLight.position.set(1000, 2000, 1000);
             fScene.add(dirLight);
 
-            // Handle resize
             const resObj = new ResizeObserver(() => {
                 if (!container.clientWidth || !fCamera) return;
                 fCamera.aspect = container.clientWidth / container.clientHeight;
@@ -1176,22 +1075,27 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             resObj.observe(container);
 
-            function animate() {
-                requestAnimationFrame(animate);
-                fOrbit.update();
-                fRenderer.render(fScene, fCamera);
-            }
+            function animate() { requestAnimationFrame(animate); fOrbit.update(); fRenderer.render(fScene, fCamera); }
             animate();
         }
 
-        // Add Listeners to Legend
-        document.getElementById('layer-f-pts')?.addEventListener('change', e => { if (fMeshes.pts) fMeshes.pts.visible = e.target.checked; });
-        document.getElementById('layer-f-mean')?.addEventListener('change', e => { if (fMeshes.mean) fMeshes.mean.visible = e.target.checked; });
-        document.getElementById('layer-f-plus')?.addEventListener('change', e => { if (fMeshes.plus) fMeshes.plus.visible = e.target.checked; });
-        document.getElementById('layer-f-minus')?.addEventListener('change', e => { if (fMeshes.minus) fMeshes.minus.visible = e.target.checked; });
+        // Legend layer listeners
+        const layerMap = {
+            'layer-f-pts': 'pts', 'layer-f-mean': 'mean',
+            'layer-f-p1': 'p1', 'layer-f-m1': 'm1',
+            'layer-f-p2': 'p2', 'layer-f-m2': 'm2',
+            'layer-f-p3': 'p3', 'layer-f-m3': 'm3'
+        };
+        if (!fScene._listenersAdded) {
+            Object.entries(layerMap).forEach(([cbId, meshKey]) => {
+                document.getElementById(cbId)?.addEventListener('change', e => {
+                    if (fMeshes[meshKey]) fMeshes[meshKey].visible = e.target.checked;
+                });
+            });
+            fScene._listenersAdded = true;
+        }
 
-        const pts = pointData;
-        const n = pts.x.length;
+        const pts = pointData, n = pts.x.length;
         if (n === 0) return;
 
         let minX = pts.x[0], maxX = pts.x[0], minY = pts.y[0], maxY = pts.y[0], minZ = pts.z[0], maxZ = pts.z[0];
@@ -1204,126 +1108,106 @@ document.addEventListener('DOMContentLoaded', () => {
         const ve = parseFloat(veFinalSlider.value);
         fBBox = { minX, maxX, minY, maxY, minZ, maxZ, ve };
 
-        const cx = (minX + maxX) / 2;
-        const cy = (minY + maxY) / 2;
-        const cz = (minZ + maxZ) / 2;
+        fOrbit.target.set((minX + maxX) / 2, ((minZ + maxZ) / 2 - minZ) * ve, -(minY + maxY) / 2);
+        fCamera.position.set((minX + maxX) / 2, ((minZ + maxZ) / 2 - minZ) * ve + (maxZ - minZ) * ve + 100, -(minY + maxY) / 2 + (maxY - minY) * 1.5);
 
-        // In Three.js: X=DataX, Y=Elevation*VE, Z=-DataY
-        fOrbit.target.set(cx, (cz - minZ) * ve, -cy);
-        fCamera.position.set(cx, (cz - minZ) * ve + (maxZ - minZ) * ve + 100, -cy + (maxY - minY) * 1.5);
-
-        // Generate Grid
         const gridSize = 80;
-        const sx = (maxX - minX) / (gridSize - 1);
-        const sy = (maxY - minY) / (gridSize - 1);
+        const gsx = (maxX - minX) / (gridSize - 1), gsy = (maxY - minY) / (gridSize - 1);
 
-        const zMean = [], zPlus = [], zMinus = [];
-        const sigma = parseFloat(sigmaSlider.value);
-        const twoSS = 2 * sigma * sigma;
-        const zScore = parseFloat(confidenceSelect.value); // 1, 2, or 3
+        const sigma = parseFloat(sigmaSlider.value), twoSS = 2 * sigma * sigma;
         const minPts = parseInt(minPtsSlider.value);
-        const minDist = parseFloat(minDistSlider.value);
-        const maxDist = parseFloat(maxDistSlider.value);
-        const minDistSq = minDist * minDist;
-        const maxDistSq = maxDist * maxDist;
+        const minDist = parseFloat(minDistSlider.value), maxDist = parseFloat(maxDistSlider.value);
+        const minDistSq = minDist * minDist, maxDistSq = maxDist * maxDist;
+
+        const zMean = [], zP1 = [], zM1 = [], zP2 = [], zM2 = [], zP3 = [], zM3 = [];
 
         for (let j = 0; j < gridSize; j++) {
-            let rowMean = []; let rowPlus = []; let rowMinus = [];
-            const wy = minY + j * sy;
+            const rowMean = [], rowP1 = [], rowM1 = [], rowP2 = [], rowM2 = [], rowP3 = [], rowM3 = [];
+            const wy = minY + j * gsy;
             for (let i = 0; i < gridSize; i++) {
-                const wx = minX + i * sx;
-
+                const wx = minX + i * gsx;
                 let minSq = Infinity;
                 const dataPoints = [];
                 for (let k = 0; k < n; k++) {
-                    const dx = wx - pts.x[k], dy = wy - pts.y[k];
-                    const dSq = dx * dx + dy * dy;
-
+                    const dx = wx - pts.x[k], dy = wy - pts.y[k], dSq = dx * dx + dy * dy;
                     if (dSq < minSq) minSq = dSq;
-                    if (dSq >= minDistSq && dSq <= maxDistSq) {
-                        const w = getVariabilityWeight(dSq, maxDistSq, maxDist);
-                        dataPoints.push({ z: pts.z[k], w: w });
-                    }
+                    if (dSq >= minDistSq && dSq <= maxDistSq) dataPoints.push({ z: pts.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
                 }
-
                 const f = 1 - Math.exp(-minSq / twoSS);
-                let wMean = NaN, sd = -1;
-
-                // 1. Exact Interpolation using Radial Basis Functions
-                wMean = evaluateRBF(wx, wy);
-
-                // 2. Variability (StDev) calculation using Tukey weights
+                const wMean = evaluateRBF(wx, wy);
+                let sd = -1;
                 if (dataPoints.length >= minPts) {
-                    let wSum = 0;
-                    let wzSum = 0;
-                    for (let p of dataPoints) {
-                        wSum += p.w;
-                        wzSum += p.w * p.z;
-                    }
+                    let wSum = 0, wzSum = 0;
+                    for (let p of dataPoints) { wSum += p.w; wzSum += p.w * p.z; }
                     if (wSum > 1e-12) {
-                        const m = wzSum / wSum; // This is the SMOOTHED mean for variance calculation
+                        const m = wzSum / wSum;
                         let varSum = 0;
-                        for (let p of dataPoints) {
-                            varSum += p.w * (p.z - m) * (p.z - m);
-                        }
+                        for (let p of dataPoints) varSum += p.w * (p.z - m) ** 2;
                         sd = Math.sqrt(varSum / wSum);
                     }
                 }
-
                 if (!isNaN(wMean) && sd >= 0) {
+                    const base = f * sd;
                     rowMean.push(wMean);
-                    const uncert = f * sd * zScore;
-                    rowPlus.push(wMean + uncert);
-                    rowMinus.push(wMean - uncert);
+                    rowP1.push(wMean + base * 1); rowM1.push(wMean - base * 1);
+                    rowP2.push(wMean + base * 2); rowM2.push(wMean - base * 2);
+                    rowP3.push(wMean + base * 3); rowM3.push(wMean - base * 3);
                 } else {
-                    rowMean.push(NaN); rowPlus.push(NaN); rowMinus.push(NaN);
+                    [rowMean, rowP1, rowM1, rowP2, rowM2, rowP3, rowM3].forEach(r => r.push(NaN));
                 }
             }
-            zMean.push(rowMean); zPlus.push(rowPlus); zMinus.push(rowMinus);
+            zMean.push(rowMean); zP1.push(rowP1); zM1.push(rowM1);
+            zP2.push(rowP2); zM2.push(rowM2); zP3.push(rowP3); zM3.push(rowM3);
         }
 
-        // Clipping Planes
         fClipPlanes = [
             new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
             new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0)
         ];
 
-        // Replace meshes
-        // Replace meshes
-        ['pts', 'mean', 'plus', 'minus'].forEach((k) => {
+        // Dispose old meshes
+        Object.keys(layerMap).forEach(cbId => {
+            const k = layerMap[cbId];
             if (fMeshes[k]) {
                 fScene.remove(fMeshes[k]);
                 if (fMeshes[k].isGroup) {
-                    fMeshes[k].children.forEach(c => { c.geometry.dispose(); c.material.dispose(); });
-                } else if (fMeshes[k].geometry) {
-                    fMeshes[k].geometry.dispose(); fMeshes[k].material.dispose();
-                }
+                    fMeshes[k].children.forEach(c => { c.geometry?.dispose(); c.material?.dispose(); });
+                } else { fMeshes[k].geometry?.dispose(); fMeshes[k].material?.dispose(); }
             }
         });
 
-        const matMean = new THREE.MeshLambertMaterial({ color: 0xa855f7, transparent: true, opacity: 0.9, side: THREE.DoubleSide, clippingPlanes: fClipPlanes });
-        const matPlus = new THREE.MeshLambertMaterial({ color: 0xef4444, transparent: true, opacity: 0.7, side: THREE.DoubleSide, clippingPlanes: fClipPlanes });
-        const matMinus = new THREE.MeshLambertMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.7, side: THREE.DoubleSide, clippingPlanes: fClipPlanes });
+        const cp = fClipPlanes;
+        const matMean = new THREE.MeshLambertMaterial({ color: 0xa855f7, transparent: true, opacity: 0.9, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP1   = new THREE.MeshLambertMaterial({ color: 0xf97316, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM1   = new THREE.MeshLambertMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP2   = new THREE.MeshLambertMaterial({ color: 0xef4444, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM2   = new THREE.MeshLambertMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP3   = new THREE.MeshLambertMaterial({ color: 0xdc2626, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM3   = new THREE.MeshLambertMaterial({ color: 0x2563eb, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matPts  = new THREE.MeshLambertMaterial({ color: 0xdc2626, clippingPlanes: cp });
 
-        fMeshes.mean = buildSurfaceMesh(gridSize, minX, sx, minY, sy, zMean, matMean);
-        fMeshes.plus = buildSurfaceMesh(gridSize, minX, sx, minY, sy, zPlus, matPlus);
-        fMeshes.minus = buildSurfaceMesh(gridSize, minX, sx, minY, sy, zMinus, matMinus);
+        fMeshes.mean = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zMean, matMean);
+        fMeshes.p1   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP1,   matP1);
+        fMeshes.m1   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM1,   matM1);
+        fMeshes.p2   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP2,   matP2);
+        fMeshes.m2   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM2,   matM2);
+        fMeshes.p3   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP3,   matP3);
+        fMeshes.m3   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM3,   matM3);
 
         fMeshes.pts = new THREE.Group();
         const dSpan = Math.max(maxX - minX, maxY - minY) || 1000;
         const ptGeo = new THREE.SphereGeometry(dSpan * 0.0075, 16, 16);
-        const ptMat = new THREE.MeshLambertMaterial({ color: 0xdc2626, clippingPlanes: fClipPlanes });
         for (let i = 0; i < n; i++) {
-            const m = new THREE.Mesh(ptGeo, ptMat);
+            const m = new THREE.Mesh(ptGeo, matPts);
             m.position.set(pts.x[i], (pts.z[i] - minZ) * ve, -pts.y[i]);
             fMeshes.pts.add(m);
         }
 
-        ['pts', 'mean', 'plus', 'minus'].forEach((k) => {
-            if (fMeshes[k]) {
-                fScene.add(fMeshes[k]);
-                const cb = document.getElementById(`layer-f-${k}`);
-                if (cb) fMeshes[k].visible = cb.checked;
+        Object.entries(layerMap).forEach(([cbId, meshKey]) => {
+            if (fMeshes[meshKey]) {
+                fScene.add(fMeshes[meshKey]);
+                const cb = document.getElementById(cbId);
+                if (cb) fMeshes[meshKey].visible = cb.checked;
             }
         });
 
@@ -1339,30 +1223,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const thickPct = parseFloat(sliceThickSlider.value) / 100;
 
         const rad = (angleDeg - 90) * Math.PI / 180;
-        const nx = Math.cos(rad);
-        const nz = Math.sin(rad);
+        const nx = Math.cos(rad), nz = Math.sin(rad);
 
         const cx = (fBBox.minX + fBBox.maxX) / 2;
-        const czMap = (fBBox.minY + fBBox.maxY) / 2; // Data Y is Three Z
-
-        // Max possible distance from center to a corner in projection on normal
-        const halfW = (fBBox.maxX - fBBox.minX) / 2;
-        const halfH = (fBBox.maxY - fBBox.minY) / 2;
+        const czMap = (fBBox.minY + fBBox.maxY) / 2;
+        const halfW = (fBBox.maxX - fBBox.minX) / 2, halfH = (fBBox.maxY - fBBox.minY) / 2;
         const maxD = Math.abs(halfW * nx) + Math.abs(halfH * nz);
-
-        // Center dot N
-        // In Three space, mapped coordinates are (X, Z) -> (DataX, -DataY)
-        // Wait, mapping is: Three.X = Data.X, Three.Z = -Data.Y
-        // So the horizontal normal in Three space is (nx, nz)
-        // Point in Three space: P = (X, Y, Z)
-        // We slice in the XZ plane.
 
         const centerOffset = cx * nx + (-czMap) * nz;
         const currentPos = centerOffset + (posPct * 2 - 1) * maxD;
 
         if (mode === 'front') {
             fClipPlanes[0].set(new THREE.Vector3(nx, 0, nz), -currentPos);
-            fClipPlanes[1].set(new THREE.Vector3(nx, 0, nz), 1e10); // Discard nothing
+            fClipPlanes[1].set(new THREE.Vector3(nx, 0, nz), 1e10);
         } else if (mode === 'back') {
             fClipPlanes[0].set(new THREE.Vector3(-nx, 0, -nz), currentPos);
             fClipPlanes[1].set(new THREE.Vector3(nx, 0, nz), 1e10);
@@ -1373,36 +1246,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Helper common function to generate Plane geometry from Z array
     function buildSurfaceMesh(gridSize, minX, sx, minY, sy, zArr, material) {
         const geo = new THREE.PlaneGeometry(0, 0, gridSize - 1, gridSize - 1);
         const pos = geo.attributes.position;
         let validPoints = 0;
-
-        const ve = fBBox ? fBBox.ve : 1;
-        const minZ = fBBox ? fBBox.minZ : 0;
+        const ve = fBBox ? fBBox.ve : 1, minZ = fBBox ? fBBox.minZ : 0;
 
         for (let j = 0; j < gridSize; j++) {
             for (let i = 0; i < gridSize; i++) {
                 const idx = j * gridSize + i;
-                const wx = minX + i * sx;
-                const wy = minY + j * sy;
                 const wz = zArr[j][i];
-                if (!isNaN(wz)) {
-                    // Mapping: Three.X = Data.X, Three.Y = (Elev - minZ) * VE, Three.Z = -Data.Y
-                    pos.setXYZ(idx, wx, (wz - minZ) * ve, -wy);
-                    validPoints++;
-                } else {
-                    pos.setXYZ(idx, wx, 0, -wy);
-                }
+                if (!isNaN(wz)) { pos.setXYZ(idx, minX + i * sx, (wz - minZ) * ve, -(minY + j * sy)); validPoints++; }
+                else { pos.setXYZ(idx, minX + i * sx, 0, -(minY + j * sy)); }
             }
         }
         geo.computeVertexNormals();
-
         if (validPoints < 10) return null;
-
-        const mesh = new THREE.Mesh(geo, material);
-        return mesh;
+        return new THREE.Mesh(geo, material);
     }
 
 });

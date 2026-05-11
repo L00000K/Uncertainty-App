@@ -706,6 +706,107 @@ code {
     color: #93c5fd;
 }
 
+/* ═══ COMBINED STACKED TAB (Uncertainty + 3D) ═══ */
+.combined-stacked {
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+/* ═══ SECONDARY BUTTON ═══ */
+.secondary-btn {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid rgba(37, 99, 235, 0.3);
+    padding: 0.55rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    width: 100%;
+    text-align: center;
+}
+
+.secondary-btn:hover:not(:disabled) {
+    background: rgba(37, 99, 235, 0.06);
+    border-color: var(--accent);
+}
+
+.secondary-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* ═══ NUMBER INPUT + SLIDER COMBO ═══ */
+.slider-number-input {
+    width: 58px;
+    min-width: 58px;
+    padding: 3px 5px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.82rem;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    background: #fff;
+    text-align: center;
+    transition: border-color 0.2s;
+}
+
+.slider-number-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+/* ═══ DATA SUMMARY MODAL ═══ */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.2s;
+}
+
+.modal-card {
+    background: var(--panel-bg);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.5rem;
+    min-width: 260px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
+}
+
+.modal-card h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 1rem;
+}
+
+.modal-close-btn {
+    width: 100%;
+    padding: 0.5rem;
+    margin-top: 1rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: inherit;
+    transition: background 0.2s;
+}
+
+.modal-close-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
 @media (max-width: 900px) {
     main {
         flex-direction: column;
