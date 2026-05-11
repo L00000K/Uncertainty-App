@@ -324,6 +324,8 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
 
     function handleFile(file) {
+        rawZ = null;
+        clearState();
         const msg = dropArea.querySelector('.file-message');
         msg.textContent = `Parsing: ${file.name}…`;
         Papa.parse(file, {
@@ -343,6 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     loadSampleBtn.addEventListener('click', () => {
         rawZ = null;
+        clearState();
         const result = Papa.parse(SAMPLE_DATA, { header: true, dynamicTyping: true, skipEmptyLines: true });
         parseRows(result.data);
         if (pointData && pointData.x.length > 2) {
@@ -388,9 +391,26 @@ document.addEventListener('DOMContentLoaded', () => {
     //  PROCESS BUTTON
     // ═══════════════════════════════════════
 
+    function clearState() {
+        storedSurfaces = null;
+        rbfWeights = null;
+        ['exp-zoi','exp-stdev','exp-u1','exp-u2','exp-u3','exp-dxf'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.disabled = true; el.checked = false; }
+        });
+        const dlBtn = document.getElementById('export-download-btn');
+        if (dlBtn) dlBtn.disabled = true;
+        const yamlBtn = document.getElementById('export-yaml-btn');
+        if (yamlBtn) yamlBtn.disabled = true;
+        const pre = document.getElementById('yaml-preview');
+        if (pre) pre.textContent = 'Run "Process All" to populate config.';
+        document.getElementById('export-status').textContent = '';
+    }
+
     processBtn.addEventListener('click', () => {
         if (!pointData) return;
         clearError();
+        clearState();
         btnText.classList.add('hidden');
         loader.classList.remove('hidden');
         processBtn.disabled = true;
@@ -688,21 +708,60 @@ document.addEventListener('DOMContentLoaded', () => {
             threeMeshes['layer-norm-plane'].add(new THREE.Mesh(cGeo, pMat));
         }
 
-        const res = 40;
-        const w = (b.rawMaxX - b.rawMinX) * scaleXYZ, h = (b.rawMaxY - b.rawMinY) * scaleXYZ;
-        const surfGeo = new THREE.PlaneGeometry(w, h, res - 1, res - 1);
-        surfGeo.rotateX(-Math.PI / 2);
-        const positions = surfGeo.attributes.position;
-        for (let i = 0; i < positions.count; i++) {
-            const vx = positions.getX(i), vz = positions.getZ(i);
-            const worldX = cx + (vx / scaleXYZ), worldY = cy - (vz / scaleXYZ);
-            const zInterp = evaluateRBF(worldX, worldY);
-            const vy = isNormalized ? (zInterp * scaleXYZ * 2) : ((zInterp - cz) * scaleXYZ * 2);
-            positions.setY(i, vy);
+        // Coverage threshold: 2× average nearest-neighbour distance
+        let nnSum = 0;
+        for (let i = 0; i < n; i++) {
+            let minD = Infinity;
+            for (let j = 0; j < n; j++) {
+                if (i === j) continue;
+                const dx = pointData.x[i]-pointData.x[j], dy = pointData.y[i]-pointData.y[j];
+                const d = Math.sqrt(dx*dx+dy*dy);
+                if (d < minD) minD = d;
+            }
+            nnSum += (minD === Infinity ? 0 : minD);
         }
-        surfGeo.computeVertexNormals();
-        const surfMat = new THREE.MeshLambertMaterial({ color: 0x8b5cf6, side: THREE.DoubleSide, opacity: 0.8, transparent: true });
-        threeMeshes['layer-interpolated'].add(new THREE.Mesh(surfGeo, surfMat));
+        const nnAvg = n > 1 ? nnSum/n : (b.rawMaxX-b.rawMinX)/5;
+        const coverageDist = nnAvg * 2.0;
+
+        const res = 50;
+        const surfVerts = new Float32Array(res * res * 3);
+        const surfValid = new Uint8Array(res * res);
+        for (let row = 0; row < res; row++) {
+            for (let col = 0; col < res; col++) {
+                const worldX = b.rawMinX + (b.rawMaxX-b.rawMinX)*col/(res-1);
+                const worldY = b.rawMinY + (b.rawMaxY-b.rawMinY)*row/(res-1);
+                let minD = Infinity;
+                for (let k = 0; k < n; k++) {
+                    const dx = worldX-pointData.x[k], dy = worldY-pointData.y[k];
+                    const d = Math.sqrt(dx*dx+dy*dy);
+                    if (d < minD) minD = d;
+                }
+                const vi = (row*res+col)*3;
+                surfVerts[vi]   = (worldX-cx)*scaleXYZ;
+                surfVerts[vi+2] = -(worldY-cy)*scaleXYZ;
+                if (minD <= coverageDist) {
+                    const zInterp = evaluateRBF(worldX, worldY);
+                    surfVerts[vi+1] = isNormalized ? zInterp*scaleXYZ*2 : (zInterp-cz)*scaleXYZ*2;
+                    surfValid[row*res+col] = 1;
+                }
+            }
+        }
+        const surfTris = [];
+        for (let row = 0; row < res-1; row++) {
+            for (let col = 0; col < res-1; col++) {
+                const i00=row*res+col, i10=i00+1, i01=(row+1)*res+col, i11=i01+1;
+                if (surfValid[i00]&&surfValid[i10]&&surfValid[i01]&&surfValid[i11])
+                    surfTris.push(i00,i10,i01, i10,i11,i01);
+            }
+        }
+        if (surfTris.length > 0) {
+            const surfGeo = new THREE.BufferGeometry();
+            surfGeo.setAttribute('position', new THREE.BufferAttribute(surfVerts, 3));
+            surfGeo.setIndex(surfTris);
+            surfGeo.computeVertexNormals();
+            const surfMat = new THREE.MeshLambertMaterial({ color: 0x8b5cf6, side: THREE.DoubleSide, opacity: 0.8, transparent: true });
+            threeMeshes['layer-interpolated'].add(new THREE.Mesh(surfGeo, surfMat));
+        }
 
         ['layer-raw-pts', 'layer-raw-labels', 'layer-norm-plane', 'layer-norm-pts', 'layer-norm-labels', 'layer-interpolated'].forEach(id => {
             const cb = document.getElementById(id);
@@ -1124,19 +1183,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Legend layer listeners
         const layerMap = {
-            'layer-f-pts': 'pts', 'layer-f-mean': 'mean',
+            'layer-f-pts': 'pts', 'layer-f-mean': 'mean', 'layer-f-interp': 'interp',
             'layer-f-p1': 'p1', 'layer-f-m1': 'm1',
             'layer-f-p2': 'p2', 'layer-f-m2': 'm2',
             'layer-f-p3': 'p3', 'layer-f-m3': 'm3'
         };
-        if (!fScene._listenersAdded) {
-            Object.entries(layerMap).forEach(([cbId, meshKey]) => {
-                document.getElementById(cbId)?.addEventListener('change', e => {
-                    if (fMeshes[meshKey]) fMeshes[meshKey].visible = e.target.checked;
-                });
-            });
-            fScene._listenersAdded = true;
-        }
+        // Re-attach listeners each render (safe: old meshes are replaced, new fMeshes ref is current)
+        Object.entries(layerMap).forEach(([cbId, meshKey]) => {
+            const el = document.getElementById(cbId);
+            if (!el) return;
+            el.onchange = e => { if (fMeshes[meshKey]) fMeshes[meshKey].visible = e.target.checked; };
+        });
 
         const pts = pointData, n = pts.x.length;
         if (n === 0) return;
@@ -1162,22 +1219,34 @@ document.addEventListener('DOMContentLoaded', () => {
         const minDist = parseFloat(minDistSlider.value), maxDist = parseFloat(maxDistSlider.value);
         const minDistSq = minDist * minDist, maxDistSq = maxDist * maxDist;
 
-        const zMean = [], zP1 = [], zM1 = [], zP2 = [], zM2 = [], zP3 = [], zM3 = [];
+        const zMean = [], zP1 = [], zM1 = [], zP2 = [], zM2 = [], zP3 = [], zM3 = [], zInterp = [];
 
         for (let j = 0; j < gridSize; j++) {
-            const rowMean = [], rowP1 = [], rowM1 = [], rowP2 = [], rowM2 = [], rowP3 = [], rowM3 = [];
+            const rowMean = [], rowP1 = [], rowM1 = [], rowP2 = [], rowM2 = [], rowP3 = [], rowM3 = [], rowInterp = [];
             const wy = minY + j * gsy;
             for (let i = 0; i < gridSize; i++) {
                 const wx = minX + i * gsx;
                 let minSq = Infinity;
+                let idwNum = 0, idwDen = 0, exactZ = null;
                 const dataPoints = [];
                 for (let k = 0; k < n; k++) {
                     const dx = wx - pts.x[k], dy = wy - pts.y[k], dSq = dx * dx + dy * dy;
                     if (dSq < minSq) minSq = dSq;
+                    if (dSq < 1e-8) { exactZ = pts.z[k]; }
+                    else if (dSq <= maxDistSq) {
+                        idwNum += pts.z[k] / dSq;
+                        idwDen += 1 / dSq;
+                    }
                     if (dSq >= minDistSq && dSq <= maxDistSq) dataPoints.push({ z: pts.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
                 }
+                if (Math.sqrt(minSq) > rbfAverageSpacing * 1.5) {
+                    [rowMean,rowP1,rowM1,rowP2,rowM2,rowP3,rowM3,rowInterp].forEach(r => r.push(NaN));
+                    continue;
+                }
+                // IDW mean — passes through contacts (exactZ), falls back to RBF in sparse areas
+                const wMean = exactZ !== null ? exactZ : (idwDen > 1e-12 ? idwNum / idwDen : evaluateRBF(wx, wy));
+                const rbfVal = evaluateRBF(wx, wy);
                 const f = 1 - Math.exp(-minSq / twoSS);
-                const wMean = evaluateRBF(wx, wy);
                 let sd = -1;
                 if (dataPoints.length >= minPts) {
                     let wSum = 0, wzSum = 0;
@@ -1192,15 +1261,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!isNaN(wMean) && sd >= 0) {
                     const base = f * sd;
                     rowMean.push(wMean);
+                    rowInterp.push(rbfVal);
                     rowP1.push(wMean + base * 1); rowM1.push(wMean - base * 1);
                     rowP2.push(wMean + base * 2); rowM2.push(wMean - base * 2);
                     rowP3.push(wMean + base * 3); rowM3.push(wMean - base * 3);
                 } else {
-                    [rowMean, rowP1, rowM1, rowP2, rowM2, rowP3, rowM3].forEach(r => r.push(NaN));
+                    [rowMean, rowP1, rowM1, rowP2, rowM2, rowP3, rowM3, rowInterp].forEach(r => r.push(NaN));
                 }
             }
             zMean.push(rowMean); zP1.push(rowP1); zM1.push(rowM1);
-            zP2.push(rowP2); zM2.push(rowM2); zP3.push(rowP3); zM3.push(rowM3);
+            zP2.push(rowP2); zM2.push(rowM2); zP3.push(rowP3); zM3.push(rowM3); zInterp.push(rowInterp);
         }
 
         fClipPlanes = [
@@ -1220,22 +1290,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const cp = fClipPlanes;
-        const matMean = new THREE.MeshLambertMaterial({ color: 0xa855f7, transparent: true, opacity: 0.9, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matP1   = new THREE.MeshLambertMaterial({ color: 0xf97316, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matM1   = new THREE.MeshLambertMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matP2   = new THREE.MeshLambertMaterial({ color: 0xef4444, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
-        const matM2   = new THREE.MeshLambertMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
-        const matP3   = new THREE.MeshLambertMaterial({ color: 0xdc2626, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matM3   = new THREE.MeshLambertMaterial({ color: 0x2563eb, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
-        const matPts  = new THREE.MeshLambertMaterial({ color: 0xdc2626, clippingPlanes: cp });
+        const matMean  = new THREE.MeshLambertMaterial({ color: 0xa855f7, transparent: true, opacity: 0.9,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matInterp= new THREE.MeshLambertMaterial({ color: 0x10b981, transparent: true, opacity: 0.7,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP1    = new THREE.MeshLambertMaterial({ color: 0xf97316, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM1    = new THREE.MeshLambertMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.65, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP2    = new THREE.MeshLambertMaterial({ color: 0xef4444, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM2    = new THREE.MeshLambertMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.5,  side: THREE.DoubleSide, clippingPlanes: cp });
+        const matP3    = new THREE.MeshLambertMaterial({ color: 0xdc2626, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matM3    = new THREE.MeshLambertMaterial({ color: 0x2563eb, transparent: true, opacity: 0.35, side: THREE.DoubleSide, clippingPlanes: cp });
+        const matPts   = new THREE.MeshLambertMaterial({ color: 0xdc2626, clippingPlanes: cp });
 
-        fMeshes.mean = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zMean, matMean);
-        fMeshes.p1   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP1,   matP1);
-        fMeshes.m1   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM1,   matM1);
-        fMeshes.p2   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP2,   matP2);
-        fMeshes.m2   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM2,   matM2);
-        fMeshes.p3   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP3,   matP3);
-        fMeshes.m3   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM3,   matM3);
+        fMeshes.mean   = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zMean,   matMean);
+        fMeshes.interp = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zInterp, matInterp);
+        fMeshes.p1     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP1,     matP1);
+        fMeshes.m1     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM1,     matM1);
+        fMeshes.p2     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP2,     matP2);
+        fMeshes.m2     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM2,     matM2);
+        fMeshes.p3     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zP3,     matP3);
+        fMeshes.m3     = buildSurfaceMesh(gridSize, minX, gsx, minY, gsy, zM3,     matM3);
 
         fMeshes.pts = new THREE.Group();
         const dSpan = Math.max(maxX - minX, maxY - minY) || 1000;
@@ -1257,7 +1329,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateClippingPlanes();
 
         // Store surfaces for DXF export
-        storedSurfaces = { gridSize, minX, gsx: gsx, minY, gsy: gsy, zMean, zP1, zM1, zP2, zM2, zP3, zM3 };
+        storedSurfaces = { gridSize, minX, gsx, minY, gsy, zMean, zInterp, zP1, zM1, zP2, zM2, zP3, zM3 };
     }
 
     function updateClippingPlanes() {
@@ -1293,21 +1365,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function buildSurfaceMesh(gridSize, minX, sx, minY, sy, zArr, material) {
-        const geo = new THREE.PlaneGeometry(0, 0, gridSize - 1, gridSize - 1);
-        const pos = geo.attributes.position;
-        let validPoints = 0;
         const ve = fBBox ? fBBox.ve : 1, minZ = fBBox ? fBBox.minZ : 0;
-
+        const verts = new Float32Array(gridSize * gridSize * 3);
+        const valid = new Uint8Array(gridSize * gridSize);
+        let validCount = 0;
         for (let j = 0; j < gridSize; j++) {
             for (let i = 0; i < gridSize; i++) {
                 const idx = j * gridSize + i;
                 const wz = zArr[j][i];
-                if (!isNaN(wz)) { pos.setXYZ(idx, minX + i * sx, (wz - minZ) * ve, -(minY + j * sy)); validPoints++; }
-                else { pos.setXYZ(idx, minX + i * sx, 0, -(minY + j * sy)); }
+                verts[idx*3]   = minX + i * sx;
+                verts[idx*3+1] = isNaN(wz) ? 0 : (wz - minZ) * ve;
+                verts[idx*3+2] = -(minY + j * sy);
+                if (!isNaN(wz)) { valid[idx] = 1; validCount++; }
             }
         }
+        if (validCount < 4) return null;
+        const tris = [];
+        for (let j = 0; j < gridSize - 1; j++) {
+            for (let i = 0; i < gridSize - 1; i++) {
+                const i00=j*gridSize+i, i10=i00+1, i01=(j+1)*gridSize+i, i11=i01+1;
+                if (valid[i00] && valid[i10] && valid[i01] && valid[i11])
+                    tris.push(i00, i10, i01, i10, i11, i01);
+            }
+        }
+        if (tris.length < 3) return null;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+        geo.setIndex(tris);
         geo.computeVertexNormals();
-        if (validPoints < 10) return null;
         return new THREE.Mesh(geo, material);
     }
 
