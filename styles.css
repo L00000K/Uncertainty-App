@@ -714,8 +714,9 @@ code {
 /* ═══ EXPORT TAB — two-column layout ═══ */
 .export-panel {
     display: flex;
+    flex: 1;
     gap: 1.5rem;
-    height: 100%;
+    min-height: 0;
     padding: 1rem;
     box-sizing: border-box;
     overflow: hidden;
