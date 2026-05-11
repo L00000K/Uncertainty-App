@@ -706,6 +706,105 @@ code {
     color: #93c5fd;
 }
 
+/* ═══ APP CONTAINER — full width ═══ */
+.app-container {
+    max-width: 100%;
+}
+
+/* ═══ EXPORT TAB — two-column layout ═══ */
+.export-panel {
+    display: flex;
+    gap: 1.5rem;
+    height: 100%;
+    padding: 1rem;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.export-col {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.export-col-yaml {
+    flex: 0 0 44%;
+}
+
+.export-col-data {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.export-col-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+}
+
+.yaml-preview {
+    flex: 1;
+    overflow-y: auto;
+    background: rgba(26, 26, 46, 0.04);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-family: Consolas, 'Courier New', monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre;
+    min-height: 200px;
+}
+
+.export-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.export-group-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.2rem;
+}
+
+.export-check-label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    color: var(--text-primary);
+    padding: 0.25rem 0;
+}
+
+.export-check-label input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.export-check-label input:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.export-filename {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    font-family: Consolas, monospace;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
 /* ═══ COMBINED STACKED TAB (Uncertainty + 3D) ═══ */
 .combined-stacked {
     display: flex !important;
