@@ -126,6 +126,11 @@
                     </div>
                 </div>
 
+                <!-- ── STEP 5: EXPORT ── -->
+                <div class="sidebar-step" data-target="tab-export">
+                    <h2 class="step-title">5. Export</h2>
+                </div>
+
                 <!-- ── STEP 4: UNCERTAINTY & 3D MODEL (merged) ── -->
                 <div class="sidebar-step" data-target="tab-combined">
                     <h2 class="step-title">
@@ -310,6 +315,42 @@
                             </div>
                         </div>
 
+                        <!-- ── EXPORT TAB ── -->
+                    <div id="tab-export" class="primary-view">
+                        <div class="export-panel">
+
+                            <!-- Left: YAML Config -->
+                            <div class="export-col export-col-yaml glass-panel" style="padding:1.25rem;">
+                                <h3 class="export-col-title">Config (YAML)</h3>
+                                <pre id="yaml-preview" class="yaml-preview">Run "Process All" to populate config.</pre>
+                                <button id="export-yaml-btn" class="secondary-btn" disabled style="margin-top:0.75rem;">↓ Download Config (.yaml)</button>
+                            </div>
+
+                            <!-- Right: Export Data -->
+                            <div class="export-col export-col-data glass-panel" style="padding:1.25rem;">
+                                <h3 class="export-col-title">Export Data</h3>
+
+                                <p class="section-desc" style="margin-bottom:0.75rem;">Select outputs to download. All files use real-world coordinates from the input data.</p>
+
+                                <div class="export-group">
+                                    <p class="export-group-label">2D Rasters (.asc)</p>
+                                    <label class="export-check-label"><input type="checkbox" id="exp-zoi" disabled> Zone of Influence <span class="export-filename">zoi.asc</span></label>
+                                    <label class="export-check-label"><input type="checkbox" id="exp-stdev" disabled> Local Variability (StDev) <span class="export-filename">stdev.asc</span></label>
+                                    <label class="export-check-label"><input type="checkbox" id="exp-u1" disabled> Uncertainty 1σ <span class="export-filename">uncertainty_1sigma.asc</span></label>
+                                    <label class="export-check-label"><input type="checkbox" id="exp-u2" disabled> Uncertainty 2σ <span class="export-filename">uncertainty_2sigma.asc</span></label>
+                                    <label class="export-check-label"><input type="checkbox" id="exp-u3" disabled> Uncertainty 3σ <span class="export-filename">uncertainty_3sigma.asc</span></label>
+                                </div>
+
+                                <div class="export-group" style="margin-top:1rem;">
+                                    <p class="export-group-label">3D Surfaces</p>
+                                    <label class="export-check-label"><input type="checkbox" id="exp-dxf" disabled> All Surfaces (mean ± 1σ/2σ/3σ) <span class="export-filename">uncertainty_surfaces.dxf</span></label>
+                                </div>
+
+                                <button id="export-download-btn" class="primary-btn" disabled style="margin-top:1.25rem;">↓ Download Selected</button>
+                                <div id="export-status" style="margin-top:0.5rem; font-size:0.8rem; color:var(--text-secondary); min-height:1.2em;"></div>
+                            </div>
+
+                        </div>
                     </div>
 
                 </div>

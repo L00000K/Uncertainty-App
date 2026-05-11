@@ -112,6 +112,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let uncertOverlay3 = null;
     let uncertMarkers = null;
 
+    // Export state
+    let storedSurfaces = null;
+    let currentDataSource = 'Unknown';
+
     // RBF state
     let rbfWeights = null;
     let rbfAverageSpacing = 1;
@@ -193,7 +197,32 @@ document.addEventListener('DOMContentLoaded', () => {
             if (targetId) document.getElementById(targetId).classList.add('active');
 
             window.dispatchEvent(new Event('resize'));
-            setTimeout(invalidateLeaflets, 120);
+            setTimeout(() => {
+                invalidateLeaflets();
+                // Force Three.js renderers to fill their containers after tab switch
+                setTimeout(() => {
+                    if (threeRenderer && document.getElementById('tab-input').classList.contains('active')) {
+                        const c = document.getElementById('input-3d-plot');
+                        if (c.clientWidth) {
+                            threeCamera.aspect = c.clientWidth / c.clientHeight;
+                            threeCamera.updateProjectionMatrix();
+                            threeRenderer.setSize(c.clientWidth, c.clientHeight);
+                            if (labelRenderer) labelRenderer.setSize(c.clientWidth, c.clientHeight);
+                        }
+                    }
+                    if (fRenderer && document.getElementById('tab-combined').classList.contains('active')) {
+                        const c = document.getElementById('final-3d-plot');
+                        if (c.clientWidth) {
+                            fCamera.aspect = c.clientWidth / c.clientHeight;
+                            fCamera.updateProjectionMatrix();
+                            fRenderer.setSize(c.clientWidth, c.clientHeight);
+                        }
+                    }
+                    if (document.getElementById('tab-export').classList.contains('active')) {
+                        refreshYAML();
+                    }
+                }, 50);
+            }, 120);
         });
     });
 
@@ -206,7 +235,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 btn.classList.add('active');
                 document.getElementById(btn.dataset.target).classList.add('active');
                 window.dispatchEvent(new Event('resize'));
-                setTimeout(invalidateLeaflets, 120);
+                setTimeout(() => {
+                    invalidateLeaflets();
+                    if (btn.dataset.target === 'input-3d' && threeRenderer) {
+                        const c = document.getElementById('input-3d-plot');
+                        if (c.clientWidth) {
+                            threeCamera.aspect = c.clientWidth / c.clientHeight;
+                            threeCamera.updateProjectionMatrix();
+                            threeRenderer.setSize(c.clientWidth, c.clientHeight);
+                            if (labelRenderer) labelRenderer.setSize(c.clientWidth, c.clientHeight);
+                        }
+                    }
+                }, 120);
             });
         });
     });
@@ -292,6 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 parseRows(r.data);
                 if (pointData && pointData.x.length > 2) {
                     msg.textContent = `${file.name} (${pointData.x.length} pts)`;
+                    currentDataSource = file.name;
                     processBtn.disabled = false;
                     dataSummaryBtn.disabled = false;
                 } else { msg.textContent = 'Could not parse X, Y, Z columns.'; }
@@ -306,6 +347,7 @@ document.addEventListener('DOMContentLoaded', () => {
         parseRows(result.data);
         if (pointData && pointData.x.length > 2) {
             dropArea.querySelector('.file-message').textContent = `Sample: Branching Paleochannel (${pointData.x.length} pts)`;
+            currentDataSource = 'Sample: Branching Paleochannel';
             processBtn.disabled = false;
             dataSummaryBtn.disabled = false;
         }
@@ -363,6 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 initVariabilityMap();
                 initUncertMap();
                 renderFinal3DView();
+                enableExportControls();
             } catch (err) {
                 console.error('Processing error:', err);
                 showError(err.message || 'An unexpected error occurred during processing.');
@@ -1212,6 +1255,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         updateClippingPlanes();
+
+        // Store surfaces for DXF export
+        storedSurfaces = { gridSize, minX, gsx: gsx, minY, gsy: gsy, zMean, zP1, zM1, zP2, zM2, zP3, zM3 };
     }
 
     function updateClippingPlanes() {
@@ -1264,5 +1310,242 @@ document.addEventListener('DOMContentLoaded', () => {
         if (validPoints < 10) return null;
         return new THREE.Mesh(geo, material);
     }
+
+    // ═══════════════════════════════════════
+    //  EXPORT — UTILITIES
+    // ═══════════════════════════════════════
+
+    function downloadText(filename, text) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }
+
+    function enableExportControls() {
+        ['exp-zoi', 'exp-stdev', 'exp-u1', 'exp-u2', 'exp-u3', 'exp-dxf'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.disabled = false; el.checked = true; }
+        });
+        const btn = document.getElementById('export-download-btn');
+        if (btn) btn.disabled = false;
+        const yamlBtn = document.getElementById('export-yaml-btn');
+        if (yamlBtn) yamlBtn.disabled = false;
+        refreshYAML();
+    }
+
+    // ═══════════════════════════════════════
+    //  EXPORT — YAML CONFIG GENERATOR
+    // ═══════════════════════════════════════
+
+    function generateYAML() {
+        const pts = pointData ? pointData.x.length : 0;
+        const lines = [
+            '# Spatial Variability Analysis — Configuration',
+            'version: "1.0"',
+            '',
+            'data:',
+            `  source: "${currentDataSource}"`,
+            `  points: ${pts}`,
+            `  normalise: ${normalizeCheck.checked}`,
+            '',
+            'zone_of_influence:',
+            `  sigma: ${sigmaSlider.value}`,
+            '',
+            'local_variability:',
+            `  min_points: ${minPtsSlider.value}`,
+            `  min_distance: ${minDistSlider.value}`,
+            `  max_distance: ${maxDistSlider.value}`,
+            '',
+            'visualisation:',
+            `  vertical_exaggeration: ${veFinalSlider.value}`,
+            `  slice_mode: ${sliceModeSelect.value}`,
+            `  slice_angle: ${sliceAngleSlider.value}`,
+            `  slice_position: ${slicePosSlider.value}`,
+            `  slice_thickness: ${sliceThickSlider.value}`,
+        ];
+        return lines.join('\n');
+    }
+
+    function refreshYAML() {
+        const el = document.getElementById('yaml-preview');
+        if (el && pointData) el.textContent = generateYAML();
+    }
+
+    document.getElementById('export-yaml-btn').addEventListener('click', () => {
+        downloadText('config.yaml', generateYAML());
+    });
+
+    // ═══════════════════════════════════════
+    //  EXPORT — 2D GRID COMPUTATION (100×100)
+    // ═══════════════════════════════════════
+
+    function computeExportGrid2D(type, sigmaFactor) {
+        if (!pointData) return null;
+        const b = bbox(0);
+        const rangeX = b.rawMaxX - b.rawMinX, rangeY = b.rawMaxY - b.rawMinY;
+        const ncols = 100, nrows = 100;
+        const cellsize = Math.max(rangeX, rangeY) / 99;
+        const xll = b.rawMinX, yll = b.rawMinY;
+
+        const sigma = parseFloat(sigmaSlider.value), twoSS = 2 * sigma * sigma;
+        const minPts = parseInt(minPtsSlider.value);
+        const minDist = parseFloat(minDistSlider.value), maxDist = parseFloat(maxDistSlider.value);
+        const minDistSq = minDist * minDist, maxDistSq = maxDist * maxDist;
+        const n = pointData.x.length;
+        const grid = new Float64Array(nrows * ncols).fill(-9999);
+
+        for (let row = 0; row < nrows; row++) {
+            const wy = b.rawMaxY - row * cellsize; // row 0 = north
+            for (let col = 0; col < ncols; col++) {
+                const wx = xll + col * cellsize;
+
+                if (type === 'zoi') {
+                    let minSq = Infinity;
+                    for (let k = 0; k < n; k++) {
+                        const dx = wx - pointData.x[k], dy = wy - pointData.y[k];
+                        const dSq = dx * dx + dy * dy;
+                        if (dSq < minSq) minSq = dSq;
+                    }
+                    grid[row * ncols + col] = 1 - Math.exp(-minSq / twoSS);
+
+                } else {
+                    let minSq = Infinity;
+                    const dataPoints = [];
+                    for (let k = 0; k < n; k++) {
+                        const dx = wx - pointData.x[k], dy = wy - pointData.y[k];
+                        const dSq = dx * dx + dy * dy;
+                        if (dSq < minSq) minSq = dSq;
+                        if (dSq >= minDistSq && dSq <= maxDistSq)
+                            dataPoints.push({ z: pointData.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
+                    }
+                    if (dataPoints.length >= minPts) {
+                        let wSum = 0, wzSum = 0;
+                        for (const p of dataPoints) { wSum += p.w; wzSum += p.w * p.z; }
+                        if (wSum > 1e-12) {
+                            const wMean = wzSum / wSum;
+                            let varSum = 0;
+                            for (const p of dataPoints) varSum += p.w * (p.z - wMean) ** 2;
+                            const sd = Math.sqrt(varSum / wSum);
+                            if (type === 'stdev') {
+                                grid[row * ncols + col] = sd;
+                            } else {
+                                const f = 1 - Math.exp(-minSq / twoSS);
+                                grid[row * ncols + col] = f * sd * sigmaFactor;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return { grid, ncols, nrows, xll, yll, cellsize };
+    }
+
+    // ═══════════════════════════════════════
+    //  EXPORT — ASC FORMATTER
+    // ═══════════════════════════════════════
+
+    function gridToASC({ grid, ncols, nrows, xll, yll, cellsize }) {
+        const header = [
+            `ncols ${ncols}`, `nrows ${nrows}`,
+            `xllcorner ${xll}`, `yllcorner ${yll}`,
+            `cellsize ${cellsize}`, `NODATA_value -9999`
+        ].join('\n');
+        const rows = [];
+        for (let r = 0; r < nrows; r++) {
+            const vals = [];
+            for (let c = 0; c < ncols; c++) {
+                const v = grid[r * ncols + c];
+                vals.push(v === -9999 ? '-9999' : v.toFixed(6));
+            }
+            rows.push(vals.join(' '));
+        }
+        return header + '\n' + rows.join('\n');
+    }
+
+    // ═══════════════════════════════════════
+    //  EXPORT — DXF FORMATTER
+    // ═══════════════════════════════════════
+
+    function surfacesToDXF(s) {
+        const layers = [
+            { key: 'zMean', name: 'MEAN_SURFACE'  },
+            { key: 'zP1',   name: 'PLUS_1SIGMA'   },
+            { key: 'zM1',   name: 'MINUS_1SIGMA'  },
+            { key: 'zP2',   name: 'PLUS_2SIGMA'   },
+            { key: 'zM2',   name: 'MINUS_2SIGMA'  },
+            { key: 'zP3',   name: 'PLUS_3SIGMA'   },
+            { key: 'zM3',   name: 'MINUS_3SIGMA'  },
+        ];
+        const lines = ['0', 'SECTION', '2', 'ENTITIES'];
+
+        for (const { key, name } of layers) {
+            const zArr = s[key];
+            if (!zArr) continue;
+            for (let j = 0; j < s.gridSize - 1; j++) {
+                for (let i = 0; i < s.gridSize - 1; i++) {
+                    const x0 = s.minX + i * s.gsx,       y0 = s.minY + j * s.gsy;
+                    const x1 = s.minX + (i + 1) * s.gsx, y1 = s.minY + (j + 1) * s.gsy;
+                    const z00 = zArr[j][i], z10 = zArr[j][i+1];
+                    const z01 = zArr[j+1][i], z11 = zArr[j+1][i+1];
+                    if (isNaN(z00) || isNaN(z10) || isNaN(z01) || isNaN(z11)) continue;
+
+                    lines.push('0','3DFACE','8',name,
+                        '10',x0.toFixed(4),'20',y0.toFixed(4),'30',z00.toFixed(4),
+                        '11',x1.toFixed(4),'21',y0.toFixed(4),'31',z10.toFixed(4),
+                        '12',x0.toFixed(4),'22',y1.toFixed(4),'32',z01.toFixed(4),
+                        '13',x0.toFixed(4),'23',y1.toFixed(4),'33',z01.toFixed(4));
+
+                    lines.push('0','3DFACE','8',name,
+                        '10',x1.toFixed(4),'20',y0.toFixed(4),'30',z10.toFixed(4),
+                        '11',x1.toFixed(4),'21',y1.toFixed(4),'31',z11.toFixed(4),
+                        '12',x0.toFixed(4),'22',y1.toFixed(4),'32',z01.toFixed(4),
+                        '13',x0.toFixed(4),'23',y1.toFixed(4),'33',z01.toFixed(4));
+                }
+            }
+        }
+        lines.push('0', 'ENDSEC', '0', 'EOF');
+        return lines.join('\n');
+    }
+
+    // ═══════════════════════════════════════
+    //  EXPORT — DOWNLOAD SELECTED BUTTON
+    // ═══════════════════════════════════════
+
+    document.getElementById('export-download-btn').addEventListener('click', () => {
+        if (!pointData) return;
+        const statusEl = document.getElementById('export-status');
+        statusEl.textContent = 'Computing…';
+        setTimeout(() => {
+            let count = 0;
+            try {
+                if (document.getElementById('exp-zoi')?.checked) {
+                    downloadText('zoi.asc', gridToASC(computeExportGrid2D('zoi', 1))); count++;
+                }
+                if (document.getElementById('exp-stdev')?.checked) {
+                    downloadText('stdev.asc', gridToASC(computeExportGrid2D('stdev', 1))); count++;
+                }
+                if (document.getElementById('exp-u1')?.checked) {
+                    downloadText('uncertainty_1sigma.asc', gridToASC(computeExportGrid2D('uncert', 1))); count++;
+                }
+                if (document.getElementById('exp-u2')?.checked) {
+                    downloadText('uncertainty_2sigma.asc', gridToASC(computeExportGrid2D('uncert', 2))); count++;
+                }
+                if (document.getElementById('exp-u3')?.checked) {
+                    downloadText('uncertainty_3sigma.asc', gridToASC(computeExportGrid2D('uncert', 3))); count++;
+                }
+                if (document.getElementById('exp-dxf')?.checked && storedSurfaces) {
+                    downloadText('uncertainty_surfaces.dxf', surfacesToDXF(storedSurfaces)); count++;
+                }
+                statusEl.textContent = count > 0
+                    ? `✓ ${count} file${count > 1 ? 's' : ''} downloaded.`
+                    : 'No items selected.';
+            } catch (e) {
+                statusEl.textContent = '⚠ Export error: ' + e.message;
+                console.error(e);
+            }
+        }, 20);
+    });
 
 });
