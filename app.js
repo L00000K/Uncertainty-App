@@ -324,6 +324,8 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
 
     function handleFile(file) {
+        rawZ = null;
+        clearState();
         const msg = dropArea.querySelector('.file-message');
         msg.textContent = `Parsing: ${file.name}…`;
         Papa.parse(file, {
@@ -343,6 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     loadSampleBtn.addEventListener('click', () => {
         rawZ = null;
+        clearState();
         const result = Papa.parse(SAMPLE_DATA, { header: true, dynamicTyping: true, skipEmptyLines: true });
         parseRows(result.data);
         if (pointData && pointData.x.length > 2) {
@@ -388,9 +391,26 @@ document.addEventListener('DOMContentLoaded', () => {
     //  PROCESS BUTTON
     // ═══════════════════════════════════════
 
+    function clearState() {
+        storedSurfaces = null;
+        rbfWeights = null;
+        ['exp-zoi','exp-stdev','exp-u1','exp-u2','exp-u3','exp-dxf'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.disabled = true; el.checked = false; }
+        });
+        const dlBtn = document.getElementById('export-download-btn');
+        if (dlBtn) dlBtn.disabled = true;
+        const yamlBtn = document.getElementById('export-yaml-btn');
+        if (yamlBtn) yamlBtn.disabled = true;
+        const pre = document.getElementById('yaml-preview');
+        if (pre) pre.textContent = 'Run "Process All" to populate config.';
+        document.getElementById('export-status').textContent = '';
+    }
+
     processBtn.addEventListener('click', () => {
         if (!pointData) return;
         clearError();
+        clearState();
         btnText.classList.add('hidden');
         loader.classList.remove('hidden');
         processBtn.disabled = true;
@@ -688,21 +708,60 @@ document.addEventListener('DOMContentLoaded', () => {
             threeMeshes['layer-norm-plane'].add(new THREE.Mesh(cGeo, pMat));
         }
 
-        const res = 40;
-        const w = (b.rawMaxX - b.rawMinX) * scaleXYZ, h = (b.rawMaxY - b.rawMinY) * scaleXYZ;
-        const surfGeo = new THREE.PlaneGeometry(w, h, res - 1, res - 1);
-        surfGeo.rotateX(-Math.PI / 2);
-        const positions = surfGeo.attributes.position;
-        for (let i = 0; i < positions.count; i++) {
-            const vx = positions.getX(i), vz = positions.getZ(i);
-            const worldX = cx + (vx / scaleXYZ), worldY = cy - (vz / scaleXYZ);
-            const zInterp = evaluateRBF(worldX, worldY);
-            const vy = isNormalized ? (zInterp * scaleXYZ * 2) : ((zInterp - cz) * scaleXYZ * 2);
-            positions.setY(i, vy);
+        // Coverage threshold: 2× average nearest-neighbour distance
+        let nnSum = 0;
+        for (let i = 0; i < n; i++) {
+            let minD = Infinity;
+            for (let j = 0; j < n; j++) {
+                if (i === j) continue;
+                const dx = pointData.x[i]-pointData.x[j], dy = pointData.y[i]-pointData.y[j];
+                const d = Math.sqrt(dx*dx+dy*dy);
+                if (d < minD) minD = d;
+            }
+            nnSum += (minD === Infinity ? 0 : minD);
         }
-        surfGeo.computeVertexNormals();
-        const surfMat = new THREE.MeshLambertMaterial({ color: 0x8b5cf6, side: THREE.DoubleSide, opacity: 0.8, transparent: true });
-        threeMeshes['layer-interpolated'].add(new THREE.Mesh(surfGeo, surfMat));
+        const nnAvg = n > 1 ? nnSum/n : (b.rawMaxX-b.rawMinX)/5;
+        const coverageDist = nnAvg * 2.0;
+
+        const res = 50;
+        const surfVerts = new Float32Array(res * res * 3);
+        const surfValid = new Uint8Array(res * res);
+        for (let row = 0; row < res; row++) {
+            for (let col = 0; col < res; col++) {
+                const worldX = b.rawMinX + (b.rawMaxX-b.rawMinX)*col/(res-1);
+                const worldY = b.rawMinY + (b.rawMaxY-b.rawMinY)*row/(res-1);
+                let minD = Infinity;
+                for (let k = 0; k < n; k++) {
+                    const dx = worldX-pointData.x[k], dy = worldY-pointData.y[k];
+                    const d = Math.sqrt(dx*dx+dy*dy);
+                    if (d < minD) minD = d;
+                }
+                const vi = (row*res+col)*3;
+                surfVerts[vi]   = (worldX-cx)*scaleXYZ;
+                surfVerts[vi+2] = -(worldY-cy)*scaleXYZ;
+                if (minD <= coverageDist) {
+                    const zInterp = evaluateRBF(worldX, worldY);
+                    surfVerts[vi+1] = isNormalized ? zInterp*scaleXYZ*2 : (zInterp-cz)*scaleXYZ*2;
+                    surfValid[row*res+col] = 1;
+                }
+            }
+        }
+        const surfTris = [];
+        for (let row = 0; row < res-1; row++) {
+            for (let col = 0; col < res-1; col++) {
+                const i00=row*res+col, i10=i00+1, i01=(row+1)*res+col, i11=i01+1;
+                if (surfValid[i00]&&surfValid[i10]&&surfValid[i01]&&surfValid[i11])
+                    surfTris.push(i00,i10,i01, i10,i11,i01);
+            }
+        }
+        if (surfTris.length > 0) {
+            const surfGeo = new THREE.BufferGeometry();
+            surfGeo.setAttribute('position', new THREE.BufferAttribute(surfVerts, 3));
+            surfGeo.setIndex(surfTris);
+            surfGeo.computeVertexNormals();
+            const surfMat = new THREE.MeshLambertMaterial({ color: 0x8b5cf6, side: THREE.DoubleSide, opacity: 0.8, transparent: true });
+            threeMeshes['layer-interpolated'].add(new THREE.Mesh(surfGeo, surfMat));
+        }
 
         ['layer-raw-pts', 'layer-raw-labels', 'layer-norm-plane', 'layer-norm-pts', 'layer-norm-labels', 'layer-interpolated'].forEach(id => {
             const cb = document.getElementById(id);
@@ -1176,6 +1235,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (dSq < minSq) minSq = dSq;
                     if (dSq >= minDistSq && dSq <= maxDistSq) dataPoints.push({ z: pts.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
                 }
+                if (Math.sqrt(minSq) > rbfAverageSpacing * 1.5) {
+                    [rowMean,rowP1,rowM1,rowP2,rowM2,rowP3,rowM3].forEach(r => r.push(NaN));
+                    continue;
+                }
                 const f = 1 - Math.exp(-minSq / twoSS);
                 const wMean = evaluateRBF(wx, wy);
                 let sd = -1;
@@ -1293,21 +1356,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function buildSurfaceMesh(gridSize, minX, sx, minY, sy, zArr, material) {
-        const geo = new THREE.PlaneGeometry(0, 0, gridSize - 1, gridSize - 1);
-        const pos = geo.attributes.position;
-        let validPoints = 0;
         const ve = fBBox ? fBBox.ve : 1, minZ = fBBox ? fBBox.minZ : 0;
-
+        const verts = new Float32Array(gridSize * gridSize * 3);
+        const valid = new Uint8Array(gridSize * gridSize);
+        let validCount = 0;
         for (let j = 0; j < gridSize; j++) {
             for (let i = 0; i < gridSize; i++) {
                 const idx = j * gridSize + i;
                 const wz = zArr[j][i];
-                if (!isNaN(wz)) { pos.setXYZ(idx, minX + i * sx, (wz - minZ) * ve, -(minY + j * sy)); validPoints++; }
-                else { pos.setXYZ(idx, minX + i * sx, 0, -(minY + j * sy)); }
+                verts[idx*3]   = minX + i * sx;
+                verts[idx*3+1] = isNaN(wz) ? 0 : (wz - minZ) * ve;
+                verts[idx*3+2] = -(minY + j * sy);
+                if (!isNaN(wz)) { valid[idx] = 1; validCount++; }
             }
         }
+        if (validCount < 4) return null;
+        const tris = [];
+        for (let j = 0; j < gridSize - 1; j++) {
+            for (let i = 0; i < gridSize - 1; i++) {
+                const i00=j*gridSize+i, i10=i00+1, i01=(j+1)*gridSize+i, i11=i01+1;
+                if (valid[i00] && valid[i10] && valid[i01] && valid[i11])
+                    tris.push(i00, i10, i01, i10, i11, i01);
+            }
+        }
+        if (tris.length < 3) return null;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+        geo.setIndex(tris);
         geo.computeVertexNormals();
-        if (validPoints < 10) return null;
         return new THREE.Mesh(geo, material);
     }
 
