@@ -1198,11 +1198,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const pts = pointData, n = pts.x.length;
         if (n === 0) return;
 
-        let minX = pts.x[0], maxX = pts.x[0], minY = pts.y[0], maxY = pts.y[0], minZ = pts.z[0], maxZ = pts.z[0];
+        // Always work in absolute elevation space — rawZ holds originals before detrending
+        const absZ = rawZ || pts.z;
+
+        let minX = pts.x[0], maxX = pts.x[0], minY = pts.y[0], maxY = pts.y[0];
+        let minZ = absZ[0], maxZ = absZ[0];
         for (let i = 1; i < n; i++) {
             if (pts.x[i] < minX) minX = pts.x[i]; if (pts.x[i] > maxX) maxX = pts.x[i];
             if (pts.y[i] < minY) minY = pts.y[i]; if (pts.y[i] > maxY) maxY = pts.y[i];
-            if (pts.z[i] < minZ) minZ = pts.z[i]; if (pts.z[i] > maxZ) maxZ = pts.z[i];
+            if (absZ[i] < minZ) minZ = absZ[i]; if (absZ[i] > maxZ) maxZ = absZ[i];
         }
 
         const ve = parseFloat(veFinalSlider.value);
@@ -1232,20 +1236,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 for (let k = 0; k < n; k++) {
                     const dx = wx - pts.x[k], dy = wy - pts.y[k], dSq = dx * dx + dy * dy;
                     if (dSq < minSq) minSq = dSq;
-                    if (dSq < 1e-8) { exactZ = pts.z[k]; }
+                    if (dSq < 1e-8) { exactZ = absZ[k]; }
                     else if (dSq <= maxDistSq) {
-                        idwNum += pts.z[k] / dSq;
+                        idwNum += absZ[k] / dSq;
                         idwDen += 1 / dSq;
                     }
-                    if (dSq >= minDistSq && dSq <= maxDistSq) dataPoints.push({ z: pts.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
+                    if (dSq >= minDistSq && dSq <= maxDistSq) dataPoints.push({ z: absZ[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
                 }
                 if (Math.sqrt(minSq) > rbfAverageSpacing * 1.5) {
                     [rowMean,rowP1,rowM1,rowP2,rowM2,rowP3,rowM3,rowInterp].forEach(r => r.push(NaN));
                     continue;
                 }
-                // IDW mean — passes through contacts (exactZ), falls back to RBF in sparse areas
-                const wMean = exactZ !== null ? exactZ : (idwDen > 1e-12 ? idwNum / idwDen : evaluateRBF(wx, wy));
-                const rbfVal = evaluateRBF(wx, wy);
+                // IDW mean in absolute elevation space — passes through contacts, falls back to RBF+trend
+                const rbfAbs = evaluateRBF(wx, wy) + (globalTrend ? globalTrend.a*wx + globalTrend.b*wy + globalTrend.c : 0);
+                const wMean = exactZ !== null ? exactZ : (idwDen > 1e-12 ? idwNum / idwDen : rbfAbs);
+                const rbfVal = rbfAbs;
                 const f = 1 - Math.exp(-minSq / twoSS);
                 let sd = -1;
                 if (dataPoints.length >= minPts) {
@@ -1314,7 +1319,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const ptGeo = new THREE.SphereGeometry(dSpan * 0.0075, 16, 16);
         for (let i = 0; i < n; i++) {
             const m = new THREE.Mesh(ptGeo, matPts);
-            m.position.set(pts.x[i], (pts.z[i] - minZ) * ve, -pts.y[i]);
+            m.position.set(pts.x[i], (absZ[i] - minZ) * ve, -pts.y[i]);
             fMeshes.pts.add(m);
         }
 
@@ -1496,6 +1501,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     grid[row * ncols + col] = 1 - Math.exp(-minSq / twoSS);
 
                 } else {
+                    const exportZ = rawZ || pointData.z; // always use absolute elevations
                     let minSq = Infinity;
                     const dataPoints = [];
                     for (let k = 0; k < n; k++) {
@@ -1503,7 +1509,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const dSq = dx * dx + dy * dy;
                         if (dSq < minSq) minSq = dSq;
                         if (dSq >= minDistSq && dSq <= maxDistSq)
-                            dataPoints.push({ z: pointData.z[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
+                            dataPoints.push({ z: exportZ[k], w: getVariabilityWeight(dSq, maxDistSq, maxDist) });
                     }
                     if (dataPoints.length >= minPts) {
                         let wSum = 0, wzSum = 0;
